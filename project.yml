@@ -1,0 +1,35 @@
+name: G2Bridge
+options:
+  bundleIdPrefix: com.jsrobles
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+
+targets:
+  G2Bridge:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: G2 Bridge
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIBackgroundModes: [audio, location]
+        NSSpeechRecognitionUsageDescription: Recognizes the Japanese speech streamed from your glasses, on this iPhone.
+        NSLocationWhenInUseUsageDescription: Only used to keep this app running in the background while you use the glasses; the location is never read or stored.
+        NSLocationAlwaysAndWhenInUseUsageDescription: Only used to keep this app running in the background while you use the glasses; the location is never read or stored.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jsrobles.g2bridge
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: minimal
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGN_IDENTITY: ""
+        TARGETED_DEVICE_FAMILY: "1"

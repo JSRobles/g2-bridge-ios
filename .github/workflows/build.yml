@@ -1,0 +1,52 @@
+name: Build unsigned IPA
+
+# Builds the app on a GitHub macOS machine and publishes an UNSIGNED .ipa as an artifact.
+# Sideloadly (on Windows) signs it with your own Apple ID when you install it on the iPhone.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build
+        run: |
+          xcodebuild -project G2Bridge.xcodeproj -scheme G2Bridge \
+            -sdk iphoneos -configuration Release -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tee build.log | tail -n 60
+
+      - name: Package the IPA
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/G2Bridge.app Payload/
+          zip -qr G2Bridge.ipa Payload
+          ls -la G2Bridge.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: G2Bridge-ipa
+          path: G2Bridge.ipa
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-log
+          path: build.log
