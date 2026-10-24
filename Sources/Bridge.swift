@@ -45,6 +45,8 @@ private final class Session {
     private var nextId = 1
     private var bytes = 0
     private var closed = false
+    private var partialTask: Task<Void, Never>?
+    private var lastTranslated: (ja: String, en: String)?
 
     init(connection: NWConnection, queue: DispatchQueue) {
         self.connection = connection
@@ -62,8 +64,12 @@ private final class Session {
         connection.start(queue: queue)
         send(["type": "hello", "speech": "apple-speechanalyzer", "translator": "apple-translation"])
 
-        recognizer.onPartial = { [weak self] text in self?.send(["type": "partial", "ja": text]) }
+        recognizer.onPartial = { [weak self] text in self?.partial(text) }
         recognizer.onFinal = { [weak self] text in self?.sentence(text) }
+        recognizer.onIgnored = { [weak self] in
+            self?.partialTask?.cancel()
+            self?.send(["type": "ignored"])
+        }
         recognizer.onError = { [weak self] message in
             appLog(message)
             self?.send(["type": "error", "message": message])
@@ -77,7 +83,22 @@ private final class Session {
         receive()
     }
 
+    /// The sentence in progress: shown at once, and translated shortly after it stops changing, so
+    /// the English follows the speech instead of waiting for Apple to finalize the sentence.
+    private func partial(_ japanese: String) {
+        send(["type": "partial", "ja": japanese])
+        partialTask?.cancel()
+        partialTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let self, !Task.isCancelled else { return }
+            guard let english = try? await self.translator.translate(japanese), !Task.isCancelled else { return }
+            self.lastTranslated = (japanese, english)
+            self.send(["type": "partial", "ja": japanese, "en": english])
+        }
+    }
+
     private func sentence(_ japanese: String) {
+        partialTask?.cancel()
         let id = nextId
         nextId += 1
         appLog("JA #\(id): \(japanese)")
@@ -85,7 +106,8 @@ private final class Session {
         Task {
             let started = Date()
             do {
-                let english = try await translator.translate(japanese)
+                // Often the same text was just translated as a partial.
+                let english = try await (lastTranslated?.ja == japanese ? lastTranslated!.en : translator.translate(japanese))
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
                 appLog("EN #\(id): \(english) (\(ms) ms)")
                 send(["type": "translation", "id": id, "en": english, "ms": ms])
