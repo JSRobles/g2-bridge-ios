@@ -27,7 +27,13 @@ First run: open the app, allow Speech Recognition, wait for "speech: Japanese mo
 "Download Japanese → English translation".
 
 ## Using the app
-Three tabs show the finished sentences (newest at the bottom): **Both** (Japanese with its English
-underneath), **Japanese** only, **English** only. The gear opens Settings: bridge status, the two
-keep-alive switches, the translation-language download, "clear all sentences" and the log. The
-keep-alive switches and the last tab are remembered between launches.
+**Conversation use:** you wear the glasses and speak English; the other person speaks Japanese.
+- What they say shows on the glasses in English (the glasses app, as before).
+- What you say in English is recognized on the phone, translated to Japanese and shown here for them
+  to read; their own Japanese appears too. Bubbles: theirs on the left, yours on the right.
+
+Three tabs show the finished sentences (newest at the bottom): **Both** (what was spoken, with its
+translation underneath), **Japanese** (the Japanese of both speakers, in large text for the other
+person), **English** (the English of both). The gear opens Settings: keep-the-screen-on, the two
+keep-alive switches, the translation-language download, "clear all sentences" and the log. Those
+switches and the last tab are remembered between launches.
