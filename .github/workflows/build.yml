@@ -1,11 +1,20 @@
 name: Build unsigned IPA
 
-# Builds the app on a GitHub macOS machine and publishes an UNSIGNED .ipa as an artifact.
-# Sideloadly (on Windows) signs it with your own Apple ID when you install it on the iPhone.
+# Builds the app on a GitHub macOS machine, publishes the UNSIGNED .ipa as a release asset and
+# writes a SideStore/AltStore source file next to it. SideStore on the phone signs the app with your
+# own Apple ID.
+#
+# Permanent links (they always point at the newest release):
+#   source for SideStore:  https://github.com/<owner>/<repo>/releases/latest/download/source.json
+#   the .ipa itself:       https://github.com/<owner>/<repo>/releases/latest/download/G2Bridge.ipa
+# Bump MARKETING_VERSION in project.yml for each build: SideStore offers an update when it changes.
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -40,10 +49,46 @@ jobs:
           zip -qr G2Bridge.ipa Payload
           ls -la G2Bridge.ipa
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: G2Bridge-ipa
-          path: G2Bridge.ipa
+      - name: Write the SideStore source
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          export VERSION=$(grep MARKETING_VERSION project.yml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          export SIZE=$(stat -f%z G2Bridge.ipa)
+          export DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          export OWNER=${REPO%%/*}
+          python3 - <<'PY'
+          import json, os
+          v, repo = os.environ["VERSION"], os.environ["REPO"]
+          url = f"https://github.com/{repo}/releases/download/v{v}/G2Bridge.ipa"
+          version = {"version": v, "buildVersion": v, "date": os.environ["DATE"], "downloadURL": url,
+                     "size": int(os.environ["SIZE"]), "minOSVersion": "26.0"}
+          app = {
+              "name": "G2 Bridge",
+              "bundleIdentifier": "com.jsrobles.g2bridge",
+              "developerName": os.environ["OWNER"],
+              "subtitle": "Apple speech and translation for the G2 glasses app",
+              "localizedDescription": "Companion to JP Live Translate: recognizes Japanese with Apple's on-device speech recognition and translates it to English, then sends it to the glasses app on this phone.",
+              "iconURL": "https://avatars.githubusercontent.com/" + os.environ["OWNER"],
+              # AltStore/SideStore read either the newer 'versions' list or these top-level fields.
+              "versions": [version],
+              **{k: version[k] for k in ("version", "versionDate", "size", "downloadURL") if k in version},
+              "versionDate": version["date"],
+          }
+          source = {"name": "G2 Bridge", "identifier": "com.jsrobles.g2bridge.source", "apps": [app], "news": []}
+          json.dump(source, open("source.json", "w"), indent=2)
+          PY
+          cat source.json
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(grep MARKETING_VERSION project.yml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          TAG="v$VERSION"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+            --title "G2 Bridge $VERSION" --notes "Unsigned build $VERSION (commit ${GITHUB_SHA::7})." --latest
+          gh release upload "$TAG" G2Bridge.ipa source.json --clobber
 
       - uses: actions/upload-artifact@v4
         if: always()
