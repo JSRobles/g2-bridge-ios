@@ -15,6 +15,7 @@ final class BridgeServer {
     private let queue = DispatchQueue(label: "bridge.server")
     private var sessions: [ObjectIdentifier: Session] = [:]
     private var recentLogs: [String] = [] // replayed to a glasses app that connects later
+    private var connections = 0
 
     func log(_ message: String) {
         queue.async {
@@ -39,7 +40,8 @@ final class BridgeServer {
     }
 
     private func accept(_ connection: NWConnection) {
-        let session = Session(connection: connection, queue: queue)
+        connections += 1
+        let session = Session(connection: connection, queue: queue, number: connections)
         let id = ObjectIdentifier(session)
         sessions[id] = session
         session.replay = recentLogs
@@ -52,6 +54,7 @@ final class BridgeServer {
 private final class Session {
     let connection: NWConnection
     let queue: DispatchQueue
+    let number: Int // which connection this is, to tell sentence numbers apart on screen
     var onClose: (() -> Void)?
     var replay: [String] = []
 
@@ -67,9 +70,10 @@ private final class Session {
     private var partialTask: Task<Void, Never>?
     private var lastTranslated: (ja: String, en: String)?
 
-    init(connection: NWConnection, queue: DispatchQueue) {
+    init(connection: NWConnection, queue: DispatchQueue, number: Int) {
         self.connection = connection
         self.queue = queue
+        self.number = number
     }
 
     func start() {
@@ -122,6 +126,8 @@ private final class Session {
         let id = nextId
         nextId += 1
         appLog("JA #\(id): \(japanese)")
+        let key = "\(number)-\(id)"
+        Task { @MainActor in AppModel.shared.heard(key: key, japanese: japanese) }
         send(["type": "final", "id": id, "ja": japanese])
         Task {
             let started = Date()
@@ -130,9 +136,11 @@ private final class Session {
                 let english = try await (lastTranslated?.ja == japanese ? lastTranslated!.en : translator.translate(japanese))
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
                 appLog("EN #\(id): \(english) (\(ms) ms)")
+                Task { @MainActor in AppModel.shared.translated(key: key, english: english) }
                 send(["type": "translation", "id": id, "en": english, "ms": ms])
             } catch {
                 appLog("translation failed: \(error)")
+                Task { @MainActor in AppModel.shared.translated(key: key, english: "(translation failed)") }
                 send(["type": "translation", "id": id, "en": "", "error": "\(error)"])
             }
         }
