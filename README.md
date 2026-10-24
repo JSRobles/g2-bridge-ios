@@ -32,8 +32,9 @@ First run: open the app, allow Speech Recognition, wait for "speech: Japanese mo
 - What you say in English is recognized on the phone, translated to Japanese and shown here for them
   to read; their own Japanese appears too. Bubbles: theirs on the left, yours on the right.
 
-Three tabs show the finished sentences (newest at the bottom): **Both** (what was spoken, with its
-translation underneath), **Japanese** (the Japanese of both speakers, in large text for the other
-person), **English** (the English of both). The gear opens Settings: keep-the-screen-on, the two
+Three tabs show the finished sentences (newest at the bottom): **Both** (everything: what was spoken
+first, with its translation underneath), **Japanese** (only what you said in English, translated to
+Japanese, in large text for the other person) and **English** (only what they said in Japanese,
+translated to English). The gear opens Settings: keep-the-screen-on, the two
 keep-alive switches, the translation-language download, "clear all sentences" and the log. Those
 switches and the last tab are remembered between launches.

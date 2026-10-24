@@ -71,9 +71,14 @@ struct TranscriptView: View {
     @EnvironmentObject var model: AppModel
     let mode: TranscriptMode
 
-    /// The English tab is only the other person's Japanese translated to English, not your own English.
+    /// Each language tab is only what was translated into it: the Japanese tab your English translated
+    /// to Japanese, the English tab the other person's Japanese translated to English.
     private var visible: [Sentence] {
-        mode == .english ? model.sentences.filter { $0.speaker == .them } : model.sentences
+        switch mode {
+        case .both: return model.sentences
+        case .japanese: return model.sentences.filter { $0.speaker == .me }
+        case .english: return model.sentences.filter { $0.speaker == .them }
+        }
     }
 
     var body: some View {
@@ -103,8 +108,7 @@ struct TranscriptView: View {
     }
 }
 
-/// One sentence as a bubble: the other person's on the left, yours on the right. The Japanese tab
-/// shows the Japanese of both (what they said, and your English translated for them to read).
+/// One sentence as a bubble: the other person's on the left, yours on the right.
 struct SentenceView: View {
     let sentence: Sentence
     let mode: TranscriptMode
@@ -148,7 +152,7 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section("Conversation") {
-                    Text("The glasses app shows what the other person says, in English. Here, what you say in English is translated to Japanese for them to read (the Japanese tab, in large text). The English tab is only their Japanese translated to English.")
+                    Text("The glasses app shows what the other person says, in English. Here, what you say in English is translated to Japanese for them to read (the Japanese tab, in large text, only what you said). The English tab is only what they said, translated to English. The Both tab has everything.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Toggle("Keep the screen on", isOn: $model.keepScreenOn)
