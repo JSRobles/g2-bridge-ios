@@ -152,7 +152,11 @@ final class Recognizer {
         ja = RecognizerChannel(locale: Self.japanese, sourceFormat: sourceFormat)
         en = RecognizerChannel(locale: Self.english, sourceFormat: sourceFormat)
         ja.onResult = { [weak self] text, confidence, isFinal, end in self?.japanese(text, confidence, isFinal, end) }
-        en.onResult = { [weak self] text, confidence, _, end in self?.lastEnglish = (text, confidence ?? 0, end) }
+        en.onResult = { [weak self] text, confidence, isFinal, end in
+            self?.lastEnglish = (text, confidence ?? 0, end)
+            // Everything the English recognizer commits goes to the log, whether or not Japanese was ignored.
+            if isFinal { appLog(String(format: "en final \"%@\": conf %.2f", text, confidence ?? -1)) }
+        }
         ja.onError = { [weak self] in self?.onError?($0) }
         en.onError = { [weak self] in self?.onError?($0) }
     }
@@ -178,6 +182,18 @@ final class Recognizer {
         return latin + other >= 3 && Double(latin) / Double(latin + other) >= 0.6
     }
 
+    /// Volatile (partial) results carry no confidence, so a partial can't be judged by it. English
+    /// speech heard as Japanese is mostly katakana ("アイムテスト…"), which real Japanese rarely is.
+    static func mostlyKatakana(_ text: String) -> Bool {
+        var katakana = 0
+        var letters = 0
+        for scalar in text.unicodeScalars where scalar.properties.isAlphabetic {
+            letters += 1
+            if (0x30A0...0x30FF).contains(scalar.value) { katakana += 1 }
+        }
+        return letters >= 5 && Double(katakana) / Double(letters) >= 0.8
+    }
+
     private func japanese(_ text: String, _ confidence: Double?, _ isFinal: Bool, _ end: Double) {
         let lag = audioSeconds - end // how far recognition trails the audio received so far
         var reason = ""
@@ -185,6 +201,7 @@ final class Recognizer {
         if !text.unicodeScalars.contains(where: { $0.properties.isAlphabetic }) { reason = "no words" }
         if reason.isEmpty, Self.mostlyLatin(text) { reason = "Latin letters" }
         if reason.isEmpty, let confidence, confidence < Self.minConfidence { reason = "low confidence" }
+        if reason.isEmpty, !isFinal, Self.mostlyKatakana(text) { reason = "katakana only" }
         if let english = lastEnglish, !english.text.isEmpty, abs(english.end - end) < 3 {
             if reason.isEmpty, english.confidence > (confidence ?? 0) + Self.englishMargin { reason = "English more confident" }
             englishNote = String(format: " | en \"%@\" %.2f", english.text, english.confidence)
