@@ -8,8 +8,7 @@
 </style>
 </head>
 <body>
-<!-- App icon, 1024 x 1024, full bleed (iOS rounds the corners). A pair of glasses; the left lens shows a
-     green あ, the right lens shows EN. Rendered to a PNG by design/render-icon.mjs. -->
+<!-- App icon, 1024 x 1024, full bleed (iOS rounds the corners). A pair of glasses; both lenses glow green: あ on the left, EN on the right. Rendered to a PNG by design/render-icon.mjs. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -31,10 +30,6 @@
     <filter id="glowGreen" x="-40%" y="-40%" width="180%" height="180%">
       <feGaussianBlur stdDeviation="14" result="blur"/>
       <feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
-    <filter id="glowWhite" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="9" result="blur"/>
-      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
     <clipPath id="leftLens"><rect x="84" y="318" width="396" height="338" rx="128"/></clipPath>
     <clipPath id="rightLens"><rect x="544" y="318" width="396" height="338" rx="128"/></clipPath>
@@ -63,7 +58,7 @@
   <text x="282" y="582" font-family="'Yu Gothic UI','Yu Gothic','Meiryo','MS Gothic',sans-serif" font-size="262" font-weight="700"
         fill="#3dff8b" text-anchor="middle" filter="url(#glowGreen)">あ</text>
   <text x="742" y="556" font-family="'Segoe UI','Arial',sans-serif" font-size="206" font-weight="800" letter-spacing="6"
-        fill="#f2f8ff" text-anchor="middle" filter="url(#glowWhite)">EN</text>
+        fill="#3dff8b" text-anchor="middle" filter="url(#glowGreen)">EN</text>
   </g>
 </svg>
 </body>
