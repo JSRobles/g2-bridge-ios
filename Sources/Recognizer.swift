@@ -131,6 +131,9 @@ final class Recognizer {
     static let english = Locale(identifier: "en-US")
     /// English must beat Japanese by this much confidence (0...1) to win. To be tuned from the log.
     static let englishMargin = 0.05
+    /// Real Japanese scored 0.96-0.98 in the first log; Japanese results made from English speech 0.35-0.57.
+    /// A result below this isn't shown, even before the English recognizer has caught up.
+    static let minConfidence = 0.6
 
     var onPartial: ((String) -> Void)?
     var onFinal: ((String) -> Void)?
@@ -143,6 +146,7 @@ final class Recognizer {
     private var audioSeconds = 0.0
     private var lastEnglish: (text: String, confidence: Double, end: Double)?
     private var ignoringEnglish = false
+    private var lastPartialLog = Date.distantPast
 
     init() {
         ja = RecognizerChannel(locale: Self.japanese, sourceFormat: sourceFormat)
@@ -178,12 +182,18 @@ final class Recognizer {
         let lag = audioSeconds - end // how far recognition trails the audio received so far
         var reason = ""
         var englishNote = ""
-        if Self.mostlyLatin(text) { reason = "Latin letters" }
+        if !text.unicodeScalars.contains(where: { $0.properties.isAlphabetic }) { reason = "no words" }
+        if reason.isEmpty, Self.mostlyLatin(text) { reason = "Latin letters" }
+        if reason.isEmpty, let confidence, confidence < Self.minConfidence { reason = "low confidence" }
         if let english = lastEnglish, !english.text.isEmpty, abs(english.end - end) < 3 {
             if reason.isEmpty, english.confidence > (confidence ?? 0) + Self.englishMargin { reason = "English more confident" }
             englishNote = String(format: " | en \"%@\" %.2f", english.text, english.confidence)
         }
         let englishWins = !reason.isEmpty
+        if !isFinal, Date().timeIntervalSince(lastPartialLog) > 0.5 {
+            lastPartialLog = Date()
+            appLog(String(format: "ja partial conf %.2f%@%@", confidence ?? -1, englishNote, englishWins ? " → hidden (\(reason))" : ""))
+        }
         if isFinal {
             appLog(String(format: "ja final \"%@\": lag %.1f s, conf %.2f%@%@", text, lag, confidence ?? -1, englishNote, englishWins ? " → ignored (\(reason))" : ""))
         }
