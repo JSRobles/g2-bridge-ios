@@ -25,3 +25,9 @@ to English with Apple's on-device Translation, and sends JSON back (`hello`, `pa
 
 First run: open the app, allow Speech Recognition, wait for "speech: Japanese model ready", and tap
 "Download Japanese → English translation".
+
+## Using the app
+Three tabs show the finished sentences (newest at the bottom): **Both** (Japanese with its English
+underneath), **Japanese** only, **English** only. The gear opens Settings: bridge status, the two
+keep-alive switches, the translation-language download, "clear all sentences" and the log. The
+keep-alive switches and the last tab are remembered between launches.
