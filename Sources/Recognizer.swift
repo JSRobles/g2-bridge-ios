@@ -191,7 +191,7 @@ final class Recognizer {
             letters += 1
             if (0x30A0...0x30FF).contains(scalar.value) { katakana += 1 }
         }
-        return letters >= 5 && Double(katakana) / Double(letters) >= 0.8
+        return letters >= 3 && Double(katakana) / Double(letters) >= 0.8
     }
 
     private func japanese(_ text: String, _ confidence: Double?, _ isFinal: Bool, _ end: Double) {
