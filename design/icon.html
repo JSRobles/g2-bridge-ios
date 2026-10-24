@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: #0b1220; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+<!-- App icon, 1024 x 1024, full bleed (iOS rounds the corners). A pair of glasses; the left lens shows a
+     green あ, the right lens shows EN. Rendered to a PNG by design/render-icon.mjs. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16233c"/>
+      <stop offset="1" stop-color="#070b14"/>
+    </linearGradient>
+    <linearGradient id="frame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f7fb"/>
+      <stop offset="1" stop-color="#aab6c8"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1a2e"/>
+      <stop offset="1" stop-color="#050a14"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glowGreen" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="14" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowWhite" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="9" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <clipPath id="leftLens"><rect x="84" y="318" width="396" height="338" rx="128"/></clipPath>
+    <clipPath id="rightLens"><rect x="544" y="318" width="396" height="338" rx="128"/></clipPath>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <g transform="translate(0 28)">
+
+  <!-- temples (arms), running off the edges -->
+  <path d="M 84 410 C 50 408 20 402 -10 392" fill="none" stroke="url(#frame)" stroke-width="34" stroke-linecap="round"/>
+  <path d="M 940 410 C 974 408 1004 402 1034 392" fill="none" stroke="url(#frame)" stroke-width="34" stroke-linecap="round"/>
+
+  <!-- bridge -->
+  <path d="M 478 440 C 500 408 524 408 546 440" fill="none" stroke="url(#frame)" stroke-width="34" stroke-linecap="round"/>
+
+  <!-- lenses: glass, then the frame on top -->
+  <rect x="84" y="318" width="396" height="338" rx="128" fill="url(#glass)"/>
+  <rect x="544" y="318" width="396" height="338" rx="128" fill="url(#glass)"/>
+  <g clip-path="url(#leftLens)"><polygon points="84,318 330,318 84,560" fill="url(#shine)"/></g>
+  <g clip-path="url(#rightLens)"><polygon points="544,318 790,318 544,560" fill="url(#shine)"/></g>
+  <rect x="84" y="318" width="396" height="338" rx="128" fill="none" stroke="url(#frame)" stroke-width="40"/>
+  <rect x="544" y="318" width="396" height="338" rx="128" fill="none" stroke="url(#frame)" stroke-width="40"/>
+
+  <!-- what the lenses show -->
+  <text x="282" y="582" font-family="'Yu Gothic UI','Yu Gothic','Meiryo','MS Gothic',sans-serif" font-size="262" font-weight="700"
+        fill="#3dff8b" text-anchor="middle" filter="url(#glowGreen)">あ</text>
+  <text x="742" y="556" font-family="'Segoe UI','Arial',sans-serif" font-size="206" font-weight="800" letter-spacing="6"
+        fill="#f2f8ff" text-anchor="middle" filter="url(#glowWhite)">EN</text>
+  </g>
+</svg>
+</body>
+</html>

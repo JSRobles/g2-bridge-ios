@@ -71,7 +71,7 @@ jobs:
               "developerName": os.environ["OWNER"],
               "subtitle": "Apple speech and translation for the G2 glasses app",
               "localizedDescription": "Companion to JP Live Translate: recognizes Japanese with Apple's on-device speech recognition and translates it to English, then sends it to the glasses app on this phone.",
-              "iconURL": "https://avatars.githubusercontent.com/" + os.environ["OWNER"],
+              "iconURL": f"https://raw.githubusercontent.com/{repo}/main/design/icon-1024.png",
               # AltStore/SideStore read either the newer 'versions' list or these top-level fields.
               "versions": [version],
               **{k: version[k] for k in ("version", "versionDate", "size", "downloadURL") if k in version},
