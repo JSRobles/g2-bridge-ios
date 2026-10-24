@@ -163,16 +163,29 @@ final class Recognizer {
         try await en.start()
     }
 
+    /// Apple's Japanese model writes English speech as Latin-letter gibberish ("Tstor Work Aps"), so a
+    /// result that is mostly Latin letters isn't Japanese.
+    static func mostlyLatin(_ text: String) -> Bool {
+        var latin = 0
+        var other = 0
+        for scalar in text.unicodeScalars where scalar.properties.isAlphabetic {
+            if scalar.value < 0x250 { latin += 1 } else { other += 1 }
+        }
+        return latin + other >= 3 && Double(latin) / Double(latin + other) >= 0.6
+    }
+
     private func japanese(_ text: String, _ confidence: Double?, _ isFinal: Bool, _ end: Double) {
         let lag = audioSeconds - end // how far recognition trails the audio received so far
-        var englishWins = false
+        var reason = ""
         var englishNote = ""
+        if Self.mostlyLatin(text) { reason = "Latin letters" }
         if let english = lastEnglish, !english.text.isEmpty, abs(english.end - end) < 3 {
-            englishWins = english.confidence > (confidence ?? 0) + Self.englishMargin
+            if reason.isEmpty, english.confidence > (confidence ?? 0) + Self.englishMargin { reason = "English more confident" }
             englishNote = String(format: " | en \"%@\" %.2f", english.text, english.confidence)
         }
+        let englishWins = !reason.isEmpty
         if isFinal {
-            appLog(String(format: "ja final: lag %.1f s, conf %.2f%@%@", lag, confidence ?? -1, englishNote, englishWins ? " → English, ignored" : ""))
+            appLog(String(format: "ja final \"%@\": lag %.1f s, conf %.2f%@%@", text, lag, confidence ?? -1, englishNote, englishWins ? " → ignored (\(reason))" : ""))
         }
         if englishWins {
             if !ignoringEnglish || isFinal { onIgnored?() }
