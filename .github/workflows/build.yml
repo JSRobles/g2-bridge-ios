@@ -7,7 +7,8 @@ name: Build unsigned IPA
 # Permanent links (they always point at the newest release):
 #   source for SideStore:  https://github.com/<owner>/<repo>/releases/latest/download/source.json
 #   the .ipa itself:       https://github.com/<owner>/<repo>/releases/latest/download/G2Bridge.ipa
-# Bump MARKETING_VERSION in project.yml for each build: SideStore offers an update when it changes.
+# Bump MARKETING_VERSION and CURRENT_PROJECT_VERSION in project.yml for each build: SideStore offers an
+# update when the version changes, and refuses an .ipa whose build number differs from the source's.
 on:
   push:
     branches: [main]
@@ -53,7 +54,8 @@ jobs:
         env:
           REPO: ${{ github.repository }}
         run: |
-          export VERSION=$(grep MARKETING_VERSION project.yml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          export VERSION=$(grep -E '^ +MARKETING_VERSION:' project.yml | sed -E 's/.*"([^"]+)".*/\1/')
+          export BUILD=$(grep -E '^ +CURRENT_PROJECT_VERSION:' project.yml | sed -E 's/.*"([^"]+)".*/\1/')
           export SIZE=$(stat -f%z G2Bridge.ipa)
           export DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           export OWNER=${REPO%%/*}
@@ -61,7 +63,7 @@ jobs:
           import json, os
           v, repo = os.environ["VERSION"], os.environ["REPO"]
           url = f"https://github.com/{repo}/releases/download/v{v}/G2Bridge.ipa"
-          version = {"version": v, "buildVersion": v, "date": os.environ["DATE"], "downloadURL": url,
+          version = {"version": v, "buildVersion": os.environ["BUILD"], "date": os.environ["DATE"], "downloadURL": url,
                      "size": int(os.environ["SIZE"]), "minOSVersion": "26.0"}
           app = {
               "name": "G2 Bridge",
@@ -84,7 +86,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION=$(grep MARKETING_VERSION project.yml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          VERSION=$(grep -E '^ +MARKETING_VERSION:' project.yml | sed -E 's/.*"([^"]+)".*/\1/')
           TAG="v$VERSION"
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
             --title "G2 Bridge $VERSION" --notes "Unsigned build $VERSION (commit ${GITHUB_SHA::7})." --latest
