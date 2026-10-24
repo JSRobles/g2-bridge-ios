@@ -71,10 +71,15 @@ struct TranscriptView: View {
     @EnvironmentObject var model: AppModel
     let mode: TranscriptMode
 
+    /// The English tab is only the other person's Japanese translated to English, not your own English.
+    private var visible: [Sentence] {
+        mode == .english ? model.sentences.filter { $0.speaker == .them } : model.sentences
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                if model.sentences.isEmpty {
+                if visible.isEmpty {
                     VStack(spacing: 8) {
                         Text("Waiting for speech…").foregroundStyle(.secondary)
                         Text(model.status).font(.footnote).foregroundStyle(.tertiary)
@@ -83,7 +88,7 @@ struct TranscriptView: View {
                     .padding(.top, 80)
                 } else {
                     LazyVStack(spacing: 14) {
-                        ForEach(model.sentences) { sentence in
+                        ForEach(visible) { sentence in
                             SentenceView(sentence: sentence, mode: mode)
                         }
                         Color.clear.frame(height: 1).id("end")
@@ -143,7 +148,7 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section("Conversation") {
-                    Text("The glasses app shows what the other person says, in English. Here, what you say in English is translated to Japanese for them to read (the Japanese tab, in large text); what they say appears too.")
+                    Text("The glasses app shows what the other person says, in English. Here, what you say in English is translated to Japanese for them to read (the Japanese tab, in large text). The English tab is only their Japanese translated to English.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Toggle("Keep the screen on", isOn: $model.keepScreenOn)
