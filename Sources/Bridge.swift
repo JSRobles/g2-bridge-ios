@@ -8,11 +8,24 @@ import Network
 final class BridgeServer {
     static let port: UInt16 = 5175
 
+    /// For appLog: every log line is also sent to the glasses app, which forwards it to the PC log.
+    static var shared: BridgeServer?
+
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "bridge.server")
     private var sessions: [ObjectIdentifier: Session] = [:]
+    private var recentLogs: [String] = [] // replayed to a glasses app that connects later
+
+    func log(_ message: String) {
+        queue.async {
+            self.recentLogs.append(message)
+            if self.recentLogs.count > 60 { self.recentLogs.removeFirst(self.recentLogs.count - 60) }
+            for session in self.sessions.values { session.sendLog(message) }
+        }
+    }
 
     func start() throws {
+        Self.shared = self
         let websocket = NWProtocolWebSocket.Options()
         websocket.autoReplyPing = true
         let parameters = NWParameters.tcp
@@ -29,6 +42,7 @@ final class BridgeServer {
         let session = Session(connection: connection, queue: queue)
         let id = ObjectIdentifier(session)
         sessions[id] = session
+        session.replay = recentLogs
         session.onClose = { [weak self] in self?.queue.async { self?.sessions[id] = nil } }
         session.start()
     }
@@ -39,6 +53,11 @@ private final class Session {
     let connection: NWConnection
     let queue: DispatchQueue
     var onClose: (() -> Void)?
+    var replay: [String] = []
+
+    func sendLog(_ message: String) {
+        send(["type": "log", "message": message])
+    }
 
     private let recognizer = Recognizer()
     private let translator = Translator()
@@ -63,6 +82,7 @@ private final class Session {
         }
         connection.start(queue: queue)
         send(["type": "hello", "speech": "apple-speechanalyzer", "translator": "apple-translation"])
+        for line in replay { sendLog(line) }
 
         recognizer.onPartial = { [weak self] text in self?.partial(text) }
         recognizer.onFinal = { [weak self] text in self?.sentence(text) }

@@ -55,5 +55,6 @@ final class AppModel: ObservableObject {
 
 /// Logging from any thread.
 func appLog(_ message: String) {
+    BridgeServer.shared?.log(message)
     Task { @MainActor in AppModel.shared.log(message) }
 }
