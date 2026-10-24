@@ -38,6 +38,7 @@ jobs:
 
       - name: Build
         run: |
+          set -o pipefail  # without this, tee/tail would hide xcodebuild's failure
           xcodebuild -project G2Bridge.xcodeproj -scheme G2Bridge \
             -sdk iphoneos -configuration Release -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
@@ -45,8 +46,10 @@ jobs:
 
       - name: Package the IPA
         run: |
+          APP=build/Build/Products/Release-iphoneos/G2Bridge.app
+          test -f "$APP/G2Bridge" || { echo "no executable in the app: the build failed"; exit 1; }
           mkdir Payload
-          cp -R build/Build/Products/Release-iphoneos/G2Bridge.app Payload/
+          cp -R "$APP" Payload/
           zip -qr G2Bridge.ipa Payload
           ls -la G2Bridge.ipa
 
