@@ -1,10 +1,19 @@
 import Foundation
 import SwiftUI
+import UIKit
 
-/// One finished sentence: what was heard, and its translation once that has arrived.
+/// Who said a sentence. The glasses wearer speaks English; the other person speaks Japanese.
+enum Speaker {
+    case them // Japanese heard through the glasses, translated to English
+    case me // English the wearer spoke, translated to Japanese for the other person to read here
+}
+
+/// One finished sentence in both languages: the one that was spoken, and its translation once that
+/// has arrived.
 struct Sentence: Identifiable, Equatable {
     let id: String // "<connection>-<number>", unique across glasses-app connections
-    let japanese: String
+    let speaker: Speaker
+    var japanese: String?
     var english: String?
     let time: Date
 }
@@ -17,6 +26,7 @@ final class AppModel: ObservableObject {
     private enum Keys {
         static let audioKeepAlive = "audioKeepAlive"
         static let locationKeepAlive = "locationKeepAlive"
+        static let keepScreenOn = "keepScreenOn"
     }
 
     @Published var lines: [String] = []
@@ -36,6 +46,13 @@ final class AppModel: ObservableObject {
             applyKeepAlive()
         }
     }
+    /// Keeps the phone's screen from dimming, since the other person reads it during the conversation.
+    @Published var keepScreenOn: Bool {
+        didSet {
+            UserDefaults.standard.set(keepScreenOn, forKey: Keys.keepScreenOn)
+            UIApplication.shared.isIdleTimerDisabled = keepScreenOn
+        }
+    }
 
     private let server = BridgeServer()
     private let keepAlive = KeepAlive()
@@ -43,9 +60,10 @@ final class AppModel: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
-        defaults.register(defaults: [Keys.audioKeepAlive: true, Keys.locationKeepAlive: false])
+        defaults.register(defaults: [Keys.audioKeepAlive: true, Keys.locationKeepAlive: false, Keys.keepScreenOn: true])
         audioKeepAlive = defaults.bool(forKey: Keys.audioKeepAlive)
         locationKeepAlive = defaults.bool(forKey: Keys.locationKeepAlive)
+        keepScreenOn = defaults.bool(forKey: Keys.keepScreenOn)
     }
 
     func log(_ message: String) {
@@ -54,14 +72,27 @@ final class AppModel: ObservableObject {
         if lines.count > 200 { lines.removeLast(lines.count - 200) }
     }
 
-    /// A sentence the recognizer has finished (before its translation).
-    func heard(key: String, japanese: String) {
-        sentences.append(Sentence(id: key, japanese: japanese, english: nil, time: Date()))
+    private func add(_ sentence: Sentence) {
+        sentences.append(sentence)
         if sentences.count > 500 { sentences.removeFirst(sentences.count - 500) }
+    }
+
+    /// Japanese the other person said (before its English translation).
+    func heard(key: String, japanese: String) {
+        add(Sentence(id: key, speaker: .them, japanese: japanese, english: nil, time: Date()))
     }
 
     func translated(key: String, english: String) {
         if let index = sentences.lastIndex(where: { $0.id == key }) { sentences[index].english = english }
+    }
+
+    /// English the wearer said (before its Japanese translation).
+    func said(key: String, english: String) {
+        add(Sentence(id: key, speaker: .me, japanese: nil, english: english, time: Date()))
+    }
+
+    func translatedToJapanese(key: String, japanese: String) {
+        if let index = sentences.lastIndex(where: { $0.id == key }) { sentences[index].japanese = japanese }
     }
 
     func clearSentences() {
@@ -71,6 +102,7 @@ final class AppModel: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        UIApplication.shared.isIdleTimerDisabled = keepScreenOn
         do {
             try server.start()
             status = "listening on 127.0.0.1:\(BridgeServer.port)"

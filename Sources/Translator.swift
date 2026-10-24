@@ -1,15 +1,20 @@
 import Foundation
 import Translation
 
-/// Apple's on-device Japanese → English translation. The languages have to be installed first
-/// (the "Download" button in the app); this runs without any screen of its own.
+/// Apple's on-device translation between two languages (for example "ja" → "en" for what the other
+/// person says, "en" → "ja" for what the wearer says). The languages have to be installed first
+/// (the "Download" button in Settings); this runs without any screen of its own.
 final class Translator {
-    private let session = TranslationSession(
-        installedSource: Locale.Language(identifier: "ja"),
-        target: Locale.Language(identifier: "en"))
+    private let session: TranslationSession
 
-    func translate(_ japanese: String) async throws -> String {
-        let response = try await session.translate(japanese)
+    init(from source: String, to target: String) {
+        session = TranslationSession(
+            installedSource: Locale.Language(identifier: source),
+            target: Locale.Language(identifier: target))
+    }
+
+    func translate(_ text: String) async throws -> String {
+        let response = try await session.translate(text)
         return response.targetText
     }
 }

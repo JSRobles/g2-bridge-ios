@@ -66,7 +66,7 @@ struct ContentView: View {
     }
 }
 
-/// The finished sentences, oldest first, scrolled to the newest.
+/// The conversation: finished sentences, oldest first, scrolled to the newest.
 struct TranscriptView: View {
     @EnvironmentObject var model: AppModel
     let mode: TranscriptMode
@@ -76,13 +76,13 @@ struct TranscriptView: View {
             ScrollView {
                 if model.sentences.isEmpty {
                     VStack(spacing: 8) {
-                        Text("Waiting for speech from the glasses app…").foregroundStyle(.secondary)
+                        Text("Waiting for speech…").foregroundStyle(.secondary)
                         Text(model.status).font(.footnote).foregroundStyle(.tertiary)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 80)
                 } else {
-                    LazyVStack(alignment: .leading, spacing: 18) {
+                    LazyVStack(spacing: 14) {
                         ForEach(model.sentences) { sentence in
                             SentenceView(sentence: sentence, mode: mode)
                         }
@@ -98,23 +98,39 @@ struct TranscriptView: View {
     }
 }
 
+/// One sentence as a bubble: the other person's on the left, yours on the right. The Japanese tab
+/// shows the Japanese of both (what they said, and your English translated for them to read).
 struct SentenceView: View {
     let sentence: Sentence
     let mode: TranscriptMode
 
+    private var mine: Bool { sentence.speaker == .me }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if mode != .english {
-                Text(sentence.japanese).font(mode == .both ? .title3 : .title2)
-            }
-            if mode != .japanese {
-                Text(sentence.english ?? "…")
-                    .font(mode == .both ? .body : .title2)
-                    .foregroundStyle(mode == .both ? Color.secondary : Color.primary)
+        VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
+            Text(mine ? "You" : "Them").font(.caption2).foregroundStyle(.secondary)
+            switch mode {
+            case .japanese:
+                line(sentence.japanese, .title)
+            case .english:
+                line(sentence.english, .title2)
+            case .both:
+                // What was spoken first, its translation under it.
+                line(mine ? sentence.english : sentence.japanese, .title3)
+                line(mine ? sentence.japanese : sentence.english, .body, secondary: true)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background((mine ? Color.blue : Color.gray).opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
+        .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         .textSelection(.enabled)
+    }
+
+    private func line(_ text: String?, _ font: Font, secondary: Bool = false) -> some View {
+        Text(text ?? "…")
+            .font(font)
+            .foregroundStyle(secondary ? Color.secondary : Color.primary)
+            .multilineTextAlignment(mine ? .trailing : .leading)
     }
 }
 
@@ -126,6 +142,12 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("Conversation") {
+                    Text("The glasses app shows what the other person says, in English. Here, what you say in English is translated to Japanese for them to read (the Japanese tab, in large text); what they say appears too.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Toggle("Keep the screen on", isOn: $model.keepScreenOn)
+                }
                 Section("Bridge") {
                     Text(model.status)
                     Toggle("Keep alive with silent audio", isOn: $model.audioKeepAlive)
@@ -135,7 +157,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section("Apple on-device models") {
-                    Button("Download Japanese → English translation", action: downloadTranslation)
+                    Button("Download Japanese and English translation", action: downloadTranslation)
                 }
                 Section("Text") {
                     Button("Clear all sentences", role: .destructive) { model.clearSentences() }

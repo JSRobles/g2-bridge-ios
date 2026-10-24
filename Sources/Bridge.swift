@@ -63,8 +63,10 @@ private final class Session {
     }
 
     private let recognizer = Recognizer()
-    private let translator = Translator()
+    private let toEnglish = Translator(from: "ja", to: "en")
+    private let toJapanese = Translator(from: "en", to: "ja")
     private var nextId = 1
+    private var nextMineId = 1
     private var bytes = 0
     private var closed = false
     private var partialTask: Task<Void, Never>?
@@ -90,6 +92,7 @@ private final class Session {
 
         recognizer.onPartial = { [weak self] text in self?.partial(text) }
         recognizer.onFinal = { [weak self] text in self?.sentence(text) }
+        recognizer.onEnglishFinal = { [weak self] text in self?.mine(text) }
         recognizer.onIgnored = { [weak self] in
             self?.partialTask?.cancel()
             self?.send(["type": "ignored"])
@@ -115,7 +118,7 @@ private final class Session {
         partialTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard let self, !Task.isCancelled else { return }
-            guard let english = try? await self.translator.translate(japanese), !Task.isCancelled else { return }
+            guard let english = try? await self.toEnglish.translate(japanese), !Task.isCancelled else { return }
             self.lastTranslated = (japanese, english)
             self.send(["type": "partial", "ja": japanese, "en": english])
         }
@@ -133,7 +136,7 @@ private final class Session {
             let started = Date()
             do {
                 // Often the same text was just translated as a partial.
-                let english = try await (lastTranslated?.ja == japanese ? lastTranslated!.en : translator.translate(japanese))
+                let english = try await (lastTranslated?.ja == japanese ? lastTranslated!.en : toEnglish.translate(japanese))
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
                 appLog("EN #\(id): \(english) (\(ms) ms)")
                 Task { @MainActor in AppModel.shared.translated(key: key, english: english) }
@@ -142,6 +145,28 @@ private final class Session {
                 appLog("translation failed: \(error)")
                 Task { @MainActor in AppModel.shared.translated(key: key, english: "(translation failed)") }
                 send(["type": "translation", "id": id, "en": "", "error": "\(error)"])
+            }
+        }
+    }
+
+    /// English the glasses wearer said: translated to Japanese and shown on this phone for the other
+    /// person to read. The glasses app is not told; it only shows what the other person says.
+    private func mine(_ english: String) {
+        let id = nextMineId
+        nextMineId += 1
+        let key = "\(number)-m\(id)"
+        appLog("EN (you) #\(id): \(english)")
+        Task { @MainActor in AppModel.shared.said(key: key, english: english) }
+        Task {
+            let started = Date()
+            do {
+                let japanese = try await toJapanese.translate(english)
+                let ms = Int(Date().timeIntervalSince(started) * 1000)
+                appLog("JA (for them) #\(id): \(japanese) (\(ms) ms)")
+                Task { @MainActor in AppModel.shared.translatedToJapanese(key: key, japanese: japanese) }
+            } catch {
+                appLog("translation to Japanese failed: \(error)")
+                Task { @MainActor in AppModel.shared.translatedToJapanese(key: key, japanese: "(translation failed)") }
             }
         }
     }

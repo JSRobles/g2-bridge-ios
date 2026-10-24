@@ -134,10 +134,15 @@ final class Recognizer {
     /// Real Japanese scored 0.96-0.98 in the first log; Japanese results made from English speech 0.35-0.57.
     /// A result below this isn't shown, even before the English recognizer has caught up.
     static let minConfidence = 0.6
+    /// English the wearer spoke: in the logs the English recognizer scored 0.79-0.97 on real English and
+    /// 0.17-0.52 on Japanese speech, and the Japanese recognizer 0.97+ on Japanese and 0.35-0.64 on English.
+    static let minEnglishConfidence = 0.65
 
     var onPartial: ((String) -> Void)?
     var onFinal: ((String) -> Void)?
     var onIgnored: (() -> Void)?
+    /// A finished English sentence that the wearer spoke (the other person speaks Japanese).
+    var onEnglishFinal: ((String) -> Void)?
     var onError: ((String) -> Void)?
 
     private let sourceFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true)!
@@ -145,6 +150,7 @@ final class Recognizer {
     private let en: RecognizerChannel
     private var audioSeconds = 0.0
     private var lastEnglish: (text: String, confidence: Double, end: Double)?
+    private var lastJapaneseFinal: (confidence: Double, end: Double)?
     private var ignoringEnglish = false
     private var lastPartialLog = Date.distantPast
 
@@ -152,11 +158,7 @@ final class Recognizer {
         ja = RecognizerChannel(locale: Self.japanese, sourceFormat: sourceFormat)
         en = RecognizerChannel(locale: Self.english, sourceFormat: sourceFormat)
         ja.onResult = { [weak self] text, confidence, isFinal, end in self?.japanese(text, confidence, isFinal, end) }
-        en.onResult = { [weak self] text, confidence, isFinal, end in
-            self?.lastEnglish = (text, confidence ?? 0, end)
-            // Everything the English recognizer commits goes to the log, whether or not Japanese was ignored.
-            if isFinal { appLog(String(format: "en final \"%@\": conf %.2f", text, confidence ?? -1)) }
-        }
+        en.onResult = { [weak self] text, confidence, isFinal, end in self?.english(text, confidence, isFinal, end) }
         ja.onError = { [weak self] in self?.onError?($0) }
         en.onError = { [weak self] in self?.onError?($0) }
     }
@@ -169,6 +171,26 @@ final class Recognizer {
     func start() async throws {
         try await ja.start()
         try await en.start()
+    }
+
+    /// A result from the English recognizer. Finals count as the wearer's own speech when it is confident
+    /// and the Japanese recognizer wasn't confidently hearing Japanese at the same moment.
+    private func english(_ text: String, _ confidence: Double?, _ isFinal: Bool, _ end: Double) {
+        lastEnglish = (text, confidence ?? 0, end)
+        guard isFinal else { return }
+        let confidence = confidence ?? 0
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var verdict = ""
+        if !trimmed.contains(where: { $0.isLetter }) {
+            verdict = "no words"
+        } else if confidence < Self.minEnglishConfidence {
+            verdict = "low confidence"
+        } else if let japanese = lastJapaneseFinal, abs(japanese.end - end) < 3, japanese.confidence >= 0.8 {
+            verdict = "Japanese heard confidently"
+        }
+        // Everything the English recognizer commits goes to the log, with what became of it.
+        appLog(String(format: "en final \"%@\": conf %.2f%@", text, confidence, verdict.isEmpty ? " → you" : " → not yours (\(verdict))"))
+        if verdict.isEmpty { onEnglishFinal?(trimmed) }
     }
 
     /// Apple's Japanese model writes English speech as Latin-letter gibberish ("Tstor Work Aps"), so a
@@ -207,6 +229,7 @@ final class Recognizer {
             englishNote = String(format: " | en \"%@\" %.2f", english.text, english.confidence)
         }
         let englishWins = !reason.isEmpty
+        if isFinal { lastJapaneseFinal = (confidence ?? 0, end) }
         if !isFinal, Date().timeIntervalSince(lastPartialLog) > 0.5 {
             lastPartialLog = Date()
             appLog(String(format: "ja partial conf %.2f%@%@", confidence ?? -1, englishNote, englishWins ? " → hidden (\(reason))" : ""))
