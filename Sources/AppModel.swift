@@ -27,6 +27,7 @@ final class AppModel: ObservableObject {
         static let audioKeepAlive = "audioKeepAlive"
         static let locationKeepAlive = "locationKeepAlive"
         static let keepScreenOn = "keepScreenOn"
+        static let useLanguageModel = ContextTranslator.defaultsKey
     }
 
     @Published var lines: [String] = []
@@ -54,16 +55,22 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Translate with Apple's on-device language model, which sees the conversation so far.
+    @Published var useLanguageModel: Bool {
+        didSet { UserDefaults.standard.set(useLanguageModel, forKey: Keys.useLanguageModel) }
+    }
+
     private let server = BridgeServer()
     private let keepAlive = KeepAlive()
     private var started = false
 
     private init() {
         let defaults = UserDefaults.standard
-        defaults.register(defaults: [Keys.audioKeepAlive: true, Keys.locationKeepAlive: false, Keys.keepScreenOn: true])
+        defaults.register(defaults: [Keys.audioKeepAlive: true, Keys.locationKeepAlive: false, Keys.keepScreenOn: true, Keys.useLanguageModel: true])
         audioKeepAlive = defaults.bool(forKey: Keys.audioKeepAlive)
         locationKeepAlive = defaults.bool(forKey: Keys.locationKeepAlive)
         keepScreenOn = defaults.bool(forKey: Keys.keepScreenOn)
+        useLanguageModel = defaults.bool(forKey: Keys.useLanguageModel)
     }
 
     func log(_ message: String) {

@@ -71,6 +71,27 @@ private final class Session {
     private var closed = false
     private var partialTask: Task<Void, Never>?
     private var lastTranslated: (ja: String, en: String)?
+    // The last lines of the conversation, both speakers, for the language model.
+    private let contextTranslator = ContextTranslator()
+    private let contextLock = NSLock()
+    private var conversation: [String] = []
+
+    private func contextLines() -> [String] {
+        contextLock.lock()
+        defer { contextLock.unlock() }
+        return conversation
+    }
+
+    private func remember(_ line: String) {
+        contextLock.lock()
+        conversation.append(line)
+        if conversation.count > 6 { conversation.removeFirst(conversation.count - 6) }
+        contextLock.unlock()
+    }
+
+    private var languageModelWanted: Bool {
+        UserDefaults.standard.bool(forKey: ContextTranslator.defaultsKey) && ContextTranslator.isAvailable
+    }
 
     init(connection: NWConnection, queue: DispatchQueue, number: Int) {
         self.connection = connection
@@ -132,19 +153,36 @@ private final class Session {
         let key = "\(number)-\(id)"
         Task { @MainActor in AppModel.shared.heard(key: key, japanese: japanese) }
         send(["type": "final", "id": id, "ja": japanese])
+        let context = contextLines()
+        remember("Them (Japanese): \(japanese)")
         Task {
             let started = Date()
-            do {
-                // Often the same text was just translated as a partial.
-                let english = try await (lastTranslated?.ja == japanese ? lastTranslated!.en : toEnglish.translate(japanese))
+            func show(_ english: String, _ how: String) {
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
-                appLog("EN #\(id): \(english) (\(ms) ms)")
+                appLog("EN #\(id) (\(how)): \(english) (\(ms) ms)")
                 Task { @MainActor in AppModel.shared.translated(key: key, english: english) }
                 send(["type": "translation", "id": id, "en": english, "ms": ms])
+            }
+            var shown = false
+            do {
+                // The quick translation first (often the partial's is the same text) ...
+                show(try await (lastTranslated?.ja == japanese ? lastTranslated!.en : toEnglish.translate(japanese)), "quick")
+                shown = true
             } catch {
                 appLog("translation failed: \(error)")
+            }
+            // ... then the language model's, which knows the conversation, replaces it.
+            if languageModelWanted {
+                do {
+                    show(try await contextTranslator.translate(japanese, from: "Japanese", to: "English", context: context), "language model")
+                    shown = true
+                } catch {
+                    appLog("language model translation failed: \(error)")
+                }
+            }
+            if !shown {
                 Task { @MainActor in AppModel.shared.translated(key: key, english: "(translation failed)") }
-                send(["type": "translation", "id": id, "en": "", "error": "\(error)"])
+                send(["type": "translation", "id": id, "en": "", "error": "translation failed"])
             }
         }
     }
@@ -157,15 +195,31 @@ private final class Session {
         let key = "\(number)-m\(id)"
         appLog("EN (you) #\(id): \(english)")
         Task { @MainActor in AppModel.shared.said(key: key, english: english) }
+        let context = contextLines()
+        remember("You (English): \(english)")
         Task {
             let started = Date()
-            do {
-                let japanese = try await toJapanese.translate(english)
+            func show(_ japanese: String, _ how: String) {
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
-                appLog("JA (for them) #\(id): \(japanese) (\(ms) ms)")
+                appLog("JA (for them) #\(id) (\(how)): \(japanese) (\(ms) ms)")
                 Task { @MainActor in AppModel.shared.translatedToJapanese(key: key, japanese: japanese) }
+            }
+            var shown = false
+            do {
+                show(try await toJapanese.translate(english), "quick")
+                shown = true
             } catch {
                 appLog("translation to Japanese failed: \(error)")
+            }
+            if languageModelWanted {
+                do {
+                    show(try await contextTranslator.translate(english, from: "English", to: "Japanese", context: context), "language model")
+                    shown = true
+                } catch {
+                    appLog("language model translation to Japanese failed: \(error)")
+                }
+            }
+            if !shown {
                 Task { @MainActor in AppModel.shared.translatedToJapanese(key: key, japanese: "(translation failed)") }
             }
         }

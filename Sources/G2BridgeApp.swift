@@ -167,6 +167,10 @@ struct SettingsView: View {
                 }
                 Section("Apple on-device models") {
                     Button("Download Japanese and English translation", action: downloadTranslation)
+                    Toggle("Translate with Apple's language model", isOn: $model.useLanguageModel)
+                    Text("Language model: \(ContextTranslator.statusText). It translates each sentence knowing the earlier lines (who is speaking about whom). It is slower than the plain translation, which shows first and is replaced when it arrives.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 Section("Text") {
                     Button("Clear all sentences", role: .destructive) { model.clearSentences() }

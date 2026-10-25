@@ -21,8 +21,8 @@ final class RecognizerChannel {
     // Apple commits (finalizes) a sentence when it decides to, which on continuous speech means one
     // block of 10-20 s: slow for the glasses and hard on the translator. So a sentence is finalized by
     // hand once it has run `minSegment` seconds and the speaker pauses, and at `maxSegment` regardless.
-    static let minSegment = 6.0
-    static let maxSegment = 8.0
+    static let minSegment = 5.0
+    static let maxSegment = 10.0
     private var audioSeconds = 0.0
     private var lastFinalAt = 0.0
     private var hasPending = false // a result has come in since the last final
@@ -171,7 +171,7 @@ final class Recognizer {
     static let minEnglishConfidence = 0.65
     /// Quiet is below this level (RMS, 0...1) for at least `pauseSeconds`; speech through the glasses is 0.05+.
     static let silenceLevel = 0.012
-    static let pauseSeconds = 0.3
+    static let pauseSeconds = 0.2
 
     var onPartial: ((String) -> Void)?
     var onFinal: ((String) -> Void)?
