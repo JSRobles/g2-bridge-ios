@@ -18,6 +18,16 @@ final class RecognizerChannel {
     private var targetFormat: AVAudioFormat?
     private let sourceFormat: AVAudioFormat
 
+    // Apple commits (finalizes) a sentence when it decides to, which on continuous speech means one
+    // block of 10-20 s: slow for the glasses and hard on the translator. So a sentence is finalized by
+    // hand once it has run `minSegment` seconds and the speaker pauses, and at `maxSegment` regardless.
+    static let minSegment = 6.0
+    static let maxSegment = 8.0
+    private var audioSeconds = 0.0
+    private var lastFinalAt = 0.0
+    private var hasPending = false // a result has come in since the last final
+    private var finalizing = false
+
     init(locale: Locale, sourceFormat: AVAudioFormat) {
         self.locale = locale
         self.sourceFormat = sourceFormat
@@ -59,6 +69,13 @@ final class RecognizerChannel {
             do {
                 for try await result in transcriber.results {
                     let text = String(result.text.characters)
+                    if result.isFinal {
+                        self?.hasPending = false
+                        self?.finalizing = false
+                        self?.lastFinalAt = self?.audioSeconds ?? 0
+                    } else if !text.isEmpty {
+                        self?.hasPending = true
+                    }
                     if text.isEmpty { continue }
                     self?.onResult?(text, Self.meanConfidence(result.text), result.isFinal, result.range.end.seconds)
                 }
@@ -80,6 +97,21 @@ final class RecognizerChannel {
             count += length
         }
         return count > 0 ? total / count : nil
+    }
+
+    /// Called with each chunk of audio: the time it ends at, and how long it has been quiet.
+    func noteAudio(seconds: Double, quietFor: Double) {
+        audioSeconds = seconds
+        guard hasPending, !finalizing, let analyzer else { return }
+        let running = seconds - lastFinalAt
+        let atPause = running >= Self.minSegment && quietFor >= Recognizer.pauseSeconds
+        guard atPause || running >= Self.maxSegment else { return }
+        finalizing = true
+        let locale = self.locale.identifier
+        appLog(String(format: "%@: finalizing after %.1f s (%@)", locale, running, atPause ? "pause" : "limit"))
+        Task { [weak self] in
+            do { try await analyzer.finalize(through: nil) } catch { self?.finalizing = false }
+        }
     }
 
     /// A buffer in the app's source format (16 kHz mono Int16).
@@ -137,6 +169,9 @@ final class Recognizer {
     /// English the wearer spoke: in the logs the English recognizer scored 0.79-0.97 on real English and
     /// 0.17-0.52 on Japanese speech, and the Japanese recognizer 0.97+ on Japanese and 0.35-0.64 on English.
     static let minEnglishConfidence = 0.65
+    /// Quiet is below this level (RMS, 0...1) for at least `pauseSeconds`; speech through the glasses is 0.05+.
+    static let silenceLevel = 0.012
+    static let pauseSeconds = 0.3
 
     var onPartial: ((String) -> Void)?
     var onFinal: ((String) -> Void)?
@@ -153,6 +188,7 @@ final class Recognizer {
     private var lastJapaneseFinal: (confidence: Double, end: Double)?
     private var ignoringEnglish = false
     private var lastPartialLog = Date.distantPast
+    private var quietFor = 0.0
 
     init() {
         ja = RecognizerChannel(locale: Self.japanese, sourceFormat: sourceFormat)
@@ -256,7 +292,16 @@ final class Recognizer {
         data.withUnsafeBytes { raw in
             if let base = raw.baseAddress { memcpy(channel[0], base, Int(frames) * 2) }
         }
-        audioSeconds += Double(frames) / 16000
+        var sum = 0.0
+        for i in 0..<Int(frames) {
+            let sample = Double(channel[0][i]) / 32768
+            sum += sample * sample
+        }
+        let chunkSeconds = Double(frames) / 16000
+        audioSeconds += chunkSeconds
+        quietFor = (sum / Double(frames)).squareRoot() < Self.silenceLevel ? quietFor + chunkSeconds : 0
+        ja.noteAudio(seconds: audioSeconds, quietFor: quietFor)
+        en.noteAudio(seconds: audioSeconds, quietFor: quietFor)
         ja.push(buffer)
         en.push(buffer)
     }
