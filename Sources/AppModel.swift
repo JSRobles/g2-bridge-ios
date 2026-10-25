@@ -66,7 +66,7 @@ final class AppModel: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
-        defaults.register(defaults: [Keys.audioKeepAlive: true, Keys.locationKeepAlive: false, Keys.keepScreenOn: true, Keys.useLanguageModel: true])
+        defaults.register(defaults: [Keys.audioKeepAlive: true, Keys.locationKeepAlive: false, Keys.keepScreenOn: true, Keys.useLanguageModel: false])
         audioKeepAlive = defaults.bool(forKey: Keys.audioKeepAlive)
         locationKeepAlive = defaults.bool(forKey: Keys.locationKeepAlive)
         keepScreenOn = defaults.bool(forKey: Keys.keepScreenOn)

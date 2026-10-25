@@ -93,6 +93,24 @@ private final class Session {
         UserDefaults.standard.bool(forKey: ContextTranslator.defaultsKey) && ContextTranslator.isAvailable
     }
 
+    // The language model takes seconds per sentence. One at a time: a sentence that finishes while it
+    // is busy keeps its quick translation instead of waiting in line (the line only ever grew).
+    private var languageModelBusy = false
+
+    private func claimLanguageModel() -> Bool {
+        contextLock.lock()
+        defer { contextLock.unlock() }
+        if languageModelBusy { return false }
+        languageModelBusy = true
+        return true
+    }
+
+    private func releaseLanguageModel() {
+        contextLock.lock()
+        languageModelBusy = false
+        contextLock.unlock()
+    }
+
     init(connection: NWConnection, queue: DispatchQueue, number: Int) {
         self.connection = connection
         self.queue = queue
@@ -115,7 +133,7 @@ private final class Session {
         recognizer.onFinal = { [weak self] text in self?.sentence(text) }
         recognizer.onEnglishFinal = { [weak self] text in self?.mine(text) }
         recognizer.onIgnored = { [weak self] in
-            self?.partialTask?.cancel()
+            self?.endPartial()
             self?.send(["type": "ignored"])
         }
         recognizer.onError = { [weak self] message in
@@ -132,21 +150,51 @@ private final class Session {
     }
 
     /// The sentence in progress: shown at once, and translated shortly after it stops changing, so
-    /// the English follows the speech instead of waiting for Apple to finalize the sentence.
+    /// the English follows the speech instead of waiting for Apple to finalize the sentence. One
+    /// translation at a time, always of the newest text: the translator can't be hurried, and a queue
+    /// of outdated partials delayed the sentences that mattered.
+    private let partialLock = NSLock()
+    private var latestPartial = ""
+    private var partialRunning = false
+
     private func partial(_ japanese: String) {
         send(["type": "partial", "ja": japanese])
-        partialTask?.cancel()
+        partialLock.lock()
+        latestPartial = japanese
+        let start = !partialRunning
+        partialRunning = true
+        partialLock.unlock()
+        guard start else { return } // the running one picks up the newest text when it is done
         partialTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard let self, !Task.isCancelled else { return }
-            guard let english = try? await self.toEnglish.translate(japanese), !Task.isCancelled else { return }
-            self.lastTranslated = (japanese, english)
-            self.send(["type": "partial", "ja": japanese, "en": english])
+            while let self, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                self.partialLock.lock()
+                let text = self.latestPartial
+                self.partialLock.unlock()
+                if let english = try? await self.toEnglish.translate(text), !Task.isCancelled {
+                    self.lastTranslated = (text, english)
+                    self.send(["type": "partial", "ja": text, "en": english])
+                }
+                self.partialLock.lock()
+                let caughtUp = self.latestPartial == text
+                if caughtUp { self.partialRunning = false }
+                self.partialLock.unlock()
+                if caughtUp { return }
+            }
         }
     }
 
-    private func sentence(_ japanese: String) {
+    /// The sentence ended (or was ignored): drop the partial translation in progress.
+    private func endPartial() {
         partialTask?.cancel()
+        partialLock.lock()
+        latestPartial = ""
+        partialRunning = false
+        partialLock.unlock()
+    }
+
+    private func sentence(_ japanese: String) {
+        endPartial()
         let id = nextId
         nextId += 1
         appLog("JA #\(id): \(japanese)")
@@ -173,11 +221,16 @@ private final class Session {
             }
             // ... then the language model's, which knows the conversation, replaces it.
             if languageModelWanted {
-                do {
-                    show(try await contextTranslator.translate(japanese, from: "Japanese", to: "English", context: context), "language model")
-                    shown = true
-                } catch {
-                    appLog("language model translation failed: \(error)")
+                if claimLanguageModel() {
+                    do {
+                        show(try await contextTranslator.translate(japanese, from: "Japanese", to: "English", context: context), "language model")
+                        shown = true
+                    } catch {
+                        appLog("language model translation failed: \(error)")
+                    }
+                    releaseLanguageModel()
+                } else {
+                    appLog("EN #\(id): language model busy, keeping the quick translation")
                 }
             }
             if !shown {
@@ -212,11 +265,16 @@ private final class Session {
                 appLog("translation to Japanese failed: \(error)")
             }
             if languageModelWanted {
-                do {
-                    show(try await contextTranslator.translate(english, from: "English", to: "Japanese", context: context), "language model")
-                    shown = true
-                } catch {
-                    appLog("language model translation to Japanese failed: \(error)")
+                if claimLanguageModel() {
+                    do {
+                        show(try await contextTranslator.translate(english, from: "English", to: "Japanese", context: context), "language model")
+                        shown = true
+                    } catch {
+                        appLog("language model translation to Japanese failed: \(error)")
+                    }
+                    releaseLanguageModel()
+                } else {
+                    appLog("JA (for them) #\(id): language model busy, keeping the quick translation")
                 }
             }
             if !shown {

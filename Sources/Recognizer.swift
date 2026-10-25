@@ -24,7 +24,7 @@ final class RecognizerChannel {
     static let minSegment = 5.0
     static let maxSegment = 10.0
     private var audioSeconds = 0.0
-    private var lastFinalAt = 0.0
+    private var pendingSince = 0.0 // when the first result of the sentence in progress came in
     private var hasPending = false // a result has come in since the last final
     private var finalizing = false
 
@@ -72,8 +72,8 @@ final class RecognizerChannel {
                     if result.isFinal {
                         self?.hasPending = false
                         self?.finalizing = false
-                        self?.lastFinalAt = self?.audioSeconds ?? 0
                     } else if !text.isEmpty {
+                        if self?.hasPending == false { self?.pendingSince = self?.audioSeconds ?? 0 }
                         self?.hasPending = true
                     }
                     if text.isEmpty { continue }
@@ -103,7 +103,7 @@ final class RecognizerChannel {
     func noteAudio(seconds: Double, quietFor: Double) {
         audioSeconds = seconds
         guard hasPending, !finalizing, let analyzer else { return }
-        let running = seconds - lastFinalAt
+        let running = seconds - pendingSince
         let atPause = running >= Self.minSegment && quietFor >= Recognizer.pauseSeconds
         guard atPause || running >= Self.maxSegment else { return }
         finalizing = true
