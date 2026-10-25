@@ -2,13 +2,37 @@ import AVFoundation
 import Foundation
 import Speech
 
+/// A word or phrase of a result with the stretch of audio it was heard in (seconds; -1 if Apple gave no time).
+struct Piece {
+    let text: String
+    let start: Double
+    let end: Double
+    let confidence: Double?
+
+    var hasTime: Bool { start >= 0 && end > start }
+    var duration: Double { max(0, end - start) }
+    var letters: [Unicode.Scalar] { text.unicodeScalars.filter { $0.properties.isAlphabetic } }
+
+    /// Kana or kanji: the script a Japanese result is written in. English speech comes out as Latin letters.
+    var isJapaneseScript: Bool {
+        letters.contains { (0x3040...0x30FF).contains($0.value) || (0x4E00...0x9FFF).contains($0.value) }
+    }
+
+    var isLatin: Bool { letters.filter { $0.value < 0x250 }.count >= 2 }
+
+    func overlap(_ other: Piece) -> Double {
+        guard hasTime, other.hasTime else { return 0 }
+        return max(0, min(end, other.end) - max(start, other.start))
+    }
+}
+
 /// One language's recognizer: Apple's on-device SpeechAnalyzer + SpeechTranscriber (iOS 26+) fed
 /// with 16 kHz mono 16-bit PCM. Volatile results are the phrase in progress; final results are
 /// committed text. Each result carries Apple's confidence for its words.
 final class RecognizerChannel {
     let locale: Locale
-    /// text, mean confidence (0...1) if known, isFinal, where in the audio the result ends (seconds)
-    var onResult: ((String, Double?, Bool, Double) -> Void)?
+    /// text, mean confidence (0...1) if known, isFinal, where in the audio the result ends (seconds), its words with their times
+    var onResult: ((String, Double?, Bool, Double, [Piece]) -> Void)?
     var onError: ((String) -> Void)?
 
     private var analyzer: SpeechAnalyzer?
@@ -77,13 +101,27 @@ final class RecognizerChannel {
                         self?.hasPending = true
                     }
                     if text.isEmpty { continue }
-                    self?.onResult?(text, Self.meanConfidence(result.text), result.isFinal, result.range.end.seconds)
+                    self?.onResult?(text, Self.meanConfidence(result.text), result.isFinal, result.range.end.seconds, Self.pieces(result.text))
                 }
             } catch {
                 self?.onError?("\(self?.locale.identifier ?? "?") recognition stopped: \(error)")
             }
         }
         try await analyzer.start(inputSequence: stream)
+    }
+
+    /// The words of a result with the audio time each was heard in.
+    private static func pieces(_ text: AttributedString) -> [Piece] {
+        var out: [Piece] = []
+        for (time, confidence, range) in text.runs[\.audioTimeRange, \.transcriptionConfidence] {
+            let piece = String(text[range].characters)
+            if let time {
+                out.append(Piece(text: piece, start: time.start.seconds, end: time.end.seconds, confidence: confidence))
+            } else {
+                out.append(Piece(text: piece, start: -1, end: -1, confidence: confidence))
+            }
+        }
+        return out
     }
 
     /// Mean of Apple's confidence over the characters of a result.
@@ -185,16 +223,25 @@ final class Recognizer {
     private let en: RecognizerChannel
     private var audioSeconds = 0.0
     private var lastEnglish: (text: String, confidence: Double, end: Double)?
-    private var lastJapaneseFinal: (confidence: Double, end: Double)?
     private var ignoringEnglish = false
+    // Everything the two recognizers committed in the last minute, word by word, to decide who heard each stretch of
+    // audio. All of this runs on `decide` (one thing at a time); a final waits `deferSeconds` for the other recognizer's.
+    private let decide = DispatchQueue(label: "recognizer.decide")
+    static let deferSeconds = 0.7
+    private var englishPieces: [Piece] = []
+    private var japanesePieces: [Piece] = []
     private var lastPartialLog = Date.distantPast
     private var quietFor = 0.0
 
     init() {
         ja = RecognizerChannel(locale: Self.japanese, sourceFormat: sourceFormat)
         en = RecognizerChannel(locale: Self.english, sourceFormat: sourceFormat)
-        ja.onResult = { [weak self] text, confidence, isFinal, end in self?.japanese(text, confidence, isFinal, end) }
-        en.onResult = { [weak self] text, confidence, isFinal, end in self?.english(text, confidence, isFinal, end) }
+        ja.onResult = { [weak self] text, confidence, isFinal, end, pieces in
+            self?.decide.async { self?.japanese(text, confidence, isFinal, end, pieces) }
+        }
+        en.onResult = { [weak self] text, confidence, isFinal, end, pieces in
+            self?.decide.async { self?.english(text, confidence, isFinal, end, pieces) }
+        }
         ja.onError = { [weak self] in self?.onError?($0) }
         en.onError = { [weak self] in self?.onError?($0) }
     }
@@ -209,24 +256,71 @@ final class Recognizer {
         try await en.start()
     }
 
-    /// A result from the English recognizer. Finals count as the wearer's own speech when it is confident
-    /// and the Japanese recognizer wasn't confidently hearing Japanese at the same moment.
-    private func english(_ text: String, _ confidence: Double?, _ isFinal: Bool, _ end: Double) {
+    /// A result from the English recognizer. A final counts as the wearer's own speech word by word: words spoken in a
+    /// stretch where the Japanese recognizer heard Japanese at least as well are not English.
+    private func english(_ text: String, _ confidence: Double?, _ isFinal: Bool, _ end: Double, _ pieces: [Piece]) {
         lastEnglish = (text, confidence ?? 0, end)
         guard isFinal else { return }
-        let confidence = confidence ?? 0
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        remember(pieces, in: &englishPieces)
+        decide.asyncAfter(deadline: .now() + Self.deferSeconds) { [weak self] in self?.judgeEnglish(text, confidence ?? 0, pieces) }
+    }
+
+    private func judgeEnglish(_ text: String, _ confidence: Double, _ pieces: [Piece]) {
+        var kept: [Piece] = []
+        var dropped: [String] = []
+        if pieces.count > 1, pieces.contains(where: { $0.hasTime }) {
+            for piece in pieces {
+                if piece.isLatin, let japanese = japanesePieces.first(where: { Self.hearsJapanese($0, over: piece) }) {
+                    dropped.append("\(piece.text.trimmingCharacters(in: .whitespaces)) [Japanese heard \(String(format: "%.2f", japanese.confidence ?? 0))]")
+                } else {
+                    kept.append(piece)
+                }
+            }
+        } else {
+            kept = pieces.isEmpty ? [Piece(text: text, start: -1, end: -1, confidence: confidence)] : pieces
+        }
+        let keptText = kept.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        let keptConfidence = Self.meanConfidence(kept) ?? confidence
         var verdict = ""
-        if !trimmed.contains(where: { $0.isLetter }) {
+        if keptText.unicodeScalars.filter({ $0.properties.isAlphabetic }).count < 2 {
             verdict = "no words"
-        } else if confidence < Self.minEnglishConfidence {
+        } else if keptConfidence < Self.minEnglishConfidence {
             verdict = "low confidence"
-        } else if let japanese = lastJapaneseFinal, abs(japanese.end - end) < 3, japanese.confidence >= 0.8 {
-            verdict = "Japanese heard confidently"
         }
         // Everything the English recognizer commits goes to the log, with what became of it.
-        appLog(String(format: "en final \"%@\": conf %.2f%@", text, confidence, verdict.isEmpty ? " → you" : " → not yours (\(verdict))"))
-        if verdict.isEmpty { onEnglishFinal?(trimmed) }
+        appLog(String(format: "en final \"%@\": conf %.2f%@%@", keptText, keptConfidence, verdict.isEmpty ? " → you" : " → not yours (\(verdict))",
+                      dropped.isEmpty ? "" : " | dropped: " + dropped.joined(separator: ", ")))
+        if verdict.isEmpty { onEnglishFinal?(keptText) }
+    }
+
+    /// The Japanese piece `ja` holds this stretch against the English piece `en`: it is Japanese script that Apple is fairly
+    /// sure of, and the English recognizer is not clearly more sure of the same audio.
+    private static func hearsJapanese(_ ja: Piece, over en: Piece) -> Bool {
+        guard ja.isJapaneseScript, (ja.confidence ?? 1) >= minConfidence, ja.overlap(en) >= 0.5 * en.duration else { return false }
+        return !((en.confidence ?? 0) > (ja.confidence ?? 1) + englishMargin)
+    }
+
+    /// The English piece `en` holds this stretch against the Japanese piece `ja`.
+    private static func hearsEnglish(_ en: Piece, over ja: Piece) -> Bool {
+        guard en.isLatin, (en.confidence ?? 0) >= minEnglishConfidence, en.overlap(ja) >= 0.5 * ja.duration else { return false }
+        return (en.confidence ?? 0) > (ja.confidence ?? 1) + englishMargin
+    }
+
+    private func remember(_ pieces: [Piece], in store: inout [Piece]) {
+        store.append(contentsOf: pieces.filter { $0.hasTime && !$0.letters.isEmpty })
+        store.removeAll { $0.end < audioSeconds - 60 }
+    }
+
+    private static func meanConfidence(_ pieces: [Piece]) -> Double? {
+        var total = 0.0
+        var weight = 0.0
+        for piece in pieces {
+            guard let confidence = piece.confidence else { continue }
+            let length = Double(max(1, piece.letters.count))
+            total += confidence * length
+            weight += length
+        }
+        return weight > 0 ? total / weight : nil
     }
 
     /// Apple's Japanese model writes English speech as Latin-letter gibberish ("Tstor Work Aps"), so a
@@ -252,34 +346,77 @@ final class Recognizer {
         return letters >= 3 && Double(katakana) / Double(letters) >= 0.8
     }
 
-    private func japanese(_ text: String, _ confidence: Double?, _ isFinal: Bool, _ end: Double) {
-        let lag = audioSeconds - end // how far recognition trails the audio received so far
+    private func japanese(_ text: String, _ confidence: Double?, _ isFinal: Bool, _ end: Double, _ pieces: [Piece]) {
+        if isFinal {
+            remember(pieces, in: &japanesePieces)
+            decide.asyncAfter(deadline: .now() + Self.deferSeconds) { [weak self] in self?.judgeJapaneseFinal(text, confidence, end, pieces) }
+            return
+        }
+        // The sentence in progress (only the glasses app's "hearing speech" uses it): judged as a whole, as before.
         var reason = ""
         var englishNote = ""
         if !text.unicodeScalars.contains(where: { $0.properties.isAlphabetic }) { reason = "no words" }
         if reason.isEmpty, Self.mostlyLatin(text) { reason = "Latin letters" }
         if reason.isEmpty, let confidence, confidence < Self.minConfidence { reason = "low confidence" }
-        if reason.isEmpty, !isFinal, Self.mostlyKatakana(text) { reason = "katakana only" }
+        if reason.isEmpty, Self.mostlyKatakana(text) { reason = "katakana only" }
         if let english = lastEnglish, !english.text.isEmpty, abs(english.end - end) < 3 {
             if reason.isEmpty, english.confidence > (confidence ?? 0) + Self.englishMargin { reason = "English more confident" }
             englishNote = String(format: " | en \"%@\" %.2f", english.text, english.confidence)
         }
-        let englishWins = !reason.isEmpty
-        if isFinal { lastJapaneseFinal = (confidence ?? 0, end) }
-        if !isFinal, Date().timeIntervalSince(lastPartialLog) > 0.5 {
+        let hidden = !reason.isEmpty
+        if Date().timeIntervalSince(lastPartialLog) > 0.5 {
             lastPartialLog = Date()
-            appLog(String(format: "ja partial conf %.2f%@%@", confidence ?? -1, englishNote, englishWins ? " → hidden (\(reason))" : ""))
+            appLog(String(format: "ja partial conf %.2f%@%@", confidence ?? -1, englishNote, hidden ? " → hidden (\(reason))" : ""))
         }
-        if isFinal {
-            appLog(String(format: "ja final \"%@\": lag %.1f s, conf %.2f%@%@", text, lag, confidence ?? -1, englishNote, englishWins ? " → ignored (\(reason))" : ""))
-        }
-        if englishWins {
-            if !ignoringEnglish || isFinal { onIgnored?() }
-            ignoringEnglish = !isFinal
+        if hidden {
+            if !ignoringEnglish { onIgnored?() }
+            ignoringEnglish = true
             return
         }
         ignoringEnglish = false
-        if isFinal { onFinal?(text) } else { onPartial?(text) }
+        onPartial?(text)
+    }
+
+    /// A committed Japanese result, word by word: a word stays if it is Japanese script that Apple is sure of and the
+    /// English recognizer did not hear the same audio clearly better. What stays is the sentence.
+    private func judgeJapaneseFinal(_ text: String, _ confidence: Double?, _ end: Double, _ pieces: [Piece]) {
+        let lag = audioSeconds - end // how far recognition trails the audio received so far
+        var kept: [Piece] = []
+        var dropped: [String] = []
+        if pieces.count > 1, pieces.contains(where: { $0.hasTime }) {
+            for piece in pieces {
+                guard !piece.letters.isEmpty else {
+                    kept.append(piece) // punctuation and spaces go with their neighbours
+                    continue
+                }
+                var reason = ""
+                if !piece.isJapaneseScript {
+                    reason = "not Japanese"
+                } else if let c = piece.confidence, c < Self.minConfidence {
+                    reason = "low confidence"
+                } else if let english = englishPieces.first(where: { Self.hearsEnglish($0, over: piece) }) {
+                    reason = String(format: "English heard %.2f", english.confidence ?? 0)
+                }
+                if reason.isEmpty { kept.append(piece) } else { dropped.append("\(piece.text.trimmingCharacters(in: .whitespaces)) [\(reason)]") }
+            }
+        } else {
+            // No word times from Apple: the whole result, as before.
+            var reason = ""
+            if !text.unicodeScalars.contains(where: { $0.properties.isAlphabetic }) { reason = "no words" }
+            if reason.isEmpty, Self.mostlyLatin(text) { reason = "Latin letters" }
+            if reason.isEmpty, let confidence, confidence < Self.minConfidence { reason = "low confidence" }
+            if let english = lastEnglish, reason.isEmpty, abs(english.end - end) < 3, english.confidence > (confidence ?? 0) + Self.englishMargin {
+                reason = "English more confident"
+            }
+            if reason.isEmpty { kept = [Piece(text: text, start: -1, end: -1, confidence: confidence)] } else { dropped.append("[\(reason)]") }
+        }
+        let keptText = kept.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        let japaneseLetters = keptText.unicodeScalars.filter { (0x3040...0x30FF).contains($0.value) || (0x4E00...0x9FFF).contains($0.value) }.count
+        let accepted = japaneseLetters >= 2
+        appLog(String(format: "ja final \"%@\": lag %.1f s, conf %.2f%@%@", keptText, lag, Self.meanConfidence(kept) ?? confidence ?? -1,
+                      dropped.isEmpty ? "" : " | dropped: " + dropped.joined(separator: ", "), accepted ? "" : " → ignored"))
+        ignoringEnglish = false
+        if accepted { onFinal?(keptText) } else { onIgnored?() }
     }
 
     /// Raw s16le mono 16 kHz bytes, as the glasses app sends them.
