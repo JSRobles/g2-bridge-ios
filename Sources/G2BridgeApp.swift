@@ -178,7 +178,8 @@ struct SettingsView: View {
                         ModelRow(model: local, chosen: model.engine.localModel == local)
                     }
                     Toggle("Run the on-phone models on the GPU", isOn: $model.localModelGPU)
-                    Text("Apple Translation always answers first. The other models then replace its result when theirs arrives; both are in the log with their times, memory and temperature. A model that isn't downloaded, is still busy with the last sentence, or fails just leaves Apple's result. Downloaded once (Wi-Fi), then used offline.")
+                    Toggle("Translate the sentence while it is being spoken", isOn: $model.livePartials)
+                    Text("Each sentence is translated when it ends and shown once. With an on-phone model chosen, Apple's quick result is only logged and the model's is shown (Apple's is used if the model isn't downloaded, is busy, or fails); the log has both with times, memory and temperature. Live translation of the sentence in progress makes the English change as the Japanese does, so it is off by default. Downloaded once (Wi-Fi), then used offline.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

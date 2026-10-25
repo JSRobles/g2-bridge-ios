@@ -170,6 +170,8 @@ private final class Session {
 
     private func partial(_ japanese: String) {
         send(["type": "partial", "ja": japanese])
+        // The English of a half-finished sentence changes with every revision of the Japanese: off unless asked for.
+        guard UserDefaults.standard.bool(forKey: AppModel.livePartialsKey) else { return }
         partialLock.lock()
         latestPartial = japanese
         let start = !partialRunning
@@ -236,6 +238,13 @@ private final class Session {
         }
     }
 
+    /// A fast local model is about to translate: the quick result is only logged, so the sentence is
+    /// shown once instead of flipping from one translation to the next.
+    private static var holdsQuickResult: Bool {
+        guard let model = TranslationEngine.current.localModel else { return false }
+        return ModelStore.isReady(model)
+    }
+
     private func sentence(_ japanese: String) {
         endPartial()
         let id = nextId
@@ -249,9 +258,15 @@ private final class Session {
         remember("Them (Japanese): \(japanese)")
         Task {
             let started = Date()
+            let hold = Self.holdsQuickResult
+            var quickText: String?
             func show(_ english: String, _ how: String) {
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
                 appLog("EN #\(id) (\(how)): \(english) (\(ms) ms)")
+                if how == "quick", hold {
+                    quickText = english
+                    return
+                }
                 Task { @MainActor in AppModel.shared.translated(key: key, english: english) }
                 send(["type": "translation", "id": id, "en": english, "ms": ms])
             }
@@ -267,6 +282,8 @@ private final class Session {
             if let better = await refine(japanese, from: "Japanese", to: "English", context: context, previous: previous, tag: "EN #\(id)") {
                 show(better.text, better.how)
                 shown = true
+            } else if let quickText {
+                show(quickText, "quick, model not used") // the model didn't answer: now the quick one is shown
             }
             if !shown {
                 Task { @MainActor in AppModel.shared.translated(key: key, english: "(translation failed)") }
@@ -288,9 +305,15 @@ private final class Session {
         remember("You (English): \(english)")
         Task {
             let started = Date()
+            let hold = Self.holdsQuickResult
+            var quickText: String?
             func show(_ japanese: String, _ how: String) {
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
                 appLog("JA (for them) #\(id) (\(how)): \(japanese) (\(ms) ms)")
+                if how == "quick", hold {
+                    quickText = japanese
+                    return
+                }
                 Task { @MainActor in AppModel.shared.translatedToJapanese(key: key, japanese: japanese) }
             }
             var shown = false
@@ -303,6 +326,8 @@ private final class Session {
             if let better = await refine(english, from: "English", to: "Japanese", context: context, previous: previous, tag: "JA (for them) #\(id)") {
                 show(better.text, better.how)
                 shown = true
+            } else if let quickText {
+                show(quickText, "quick, model not used")
             }
             if !shown {
                 Task { @MainActor in AppModel.shared.translatedToJapanese(key: key, japanese: "(translation failed)") }

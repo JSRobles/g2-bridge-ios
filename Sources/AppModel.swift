@@ -63,6 +63,13 @@ final class AppModel: ObservableObject {
         }
     }
 
+    static let livePartialsKey = "livePartialTranslation"
+
+    /// Translate the sentence in progress while it is still being spoken (the English changes as the Japanese does).
+    @Published var livePartials: Bool {
+        didSet { UserDefaults.standard.set(livePartials, forKey: Self.livePartialsKey) }
+    }
+
     /// Run the local models on the GPU (Metal) instead of the CPU.
     @Published var localModelGPU: Bool {
         didSet {
@@ -82,6 +89,7 @@ final class AppModel: ObservableObject {
         locationKeepAlive = defaults.bool(forKey: Keys.locationKeepAlive)
         keepScreenOn = defaults.bool(forKey: Keys.keepScreenOn)
         localModelGPU = defaults.bool(forKey: LocalTranslator.gpuKey)
+        livePartials = defaults.bool(forKey: AppModel.livePartialsKey)
         if let saved = defaults.string(forKey: TranslationEngine.defaultsKey), let known = TranslationEngine(rawValue: saved) {
             engine = known
         } else {
