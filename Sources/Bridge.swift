@@ -145,8 +145,10 @@ private final class Session {
         recognizer.onEnglishFinal = { [weak self] text in self?.mine(text) }
         recognizer.onIgnored = { [weak self] in
             self?.endPartial()
+            self?.setSpeaking(false)
             self?.send(["type": "ignored"])
         }
+        warmUp()
         recognizer.onError = { [weak self] message in
             appLog(message)
             self?.send(["type": "error", "message": message])
@@ -160,6 +162,27 @@ private final class Session {
         receive()
     }
 
+    /// The first translation of a session took up to 4 s while Apple loaded its model; do that now, before anyone speaks.
+    /// The chosen on-phone model is loaded too (it is unloaded after a memory warning).
+    private func warmUp() {
+        if let model = TranslationEngine.current.localModel { LocalTranslator.shared.preload(model) }
+        Task {
+            let started = Date()
+            _ = try? await toEnglish.translate("こんにちは")
+            _ = try? await toJapanese.translate("Hello")
+            appLog("translators warmed up in \(Int(Date().timeIntervalSince(started) * 1000)) ms")
+        }
+    }
+
+    /// Tells the glasses app that Japanese is being heard, so its status line can say so while nothing is drawn yet.
+    private var speakingOn = false
+
+    private func setSpeaking(_ on: Bool) {
+        guard on != speakingOn else { return }
+        speakingOn = on
+        send(["type": "speaking", "on": on])
+    }
+
     /// The sentence in progress: shown at once, and translated shortly after it stops changing, so
     /// the English follows the speech instead of waiting for Apple to finalize the sentence. One
     /// translation at a time, always of the newest text: the translator can't be hurried, and a queue
@@ -169,6 +192,7 @@ private final class Session {
     private var partialRunning = false
 
     private func partial(_ japanese: String) {
+        setSpeaking(true)
         send(["type": "partial", "ja": japanese])
         // The English of a half-finished sentence changes with every revision of the Japanese: off unless asked for.
         guard UserDefaults.standard.bool(forKey: AppModel.livePartialsKey) else { return }
@@ -247,6 +271,7 @@ private final class Session {
 
     private func sentence(_ japanese: String) {
         endPartial()
+        setSpeaking(false)
         let id = nextId
         nextId += 1
         appLog("JA #\(id): \(japanese)")
@@ -259,32 +284,34 @@ private final class Session {
         Task {
             let started = Date()
             let hold = Self.holdsQuickResult
-            var quickText: String?
+            var shown = false
             func show(_ english: String, _ how: String) {
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
                 appLog("EN #\(id) (\(how)): \(english) (\(ms) ms)")
-                if how == "quick", hold {
-                    quickText = english
-                    return
-                }
                 Task { @MainActor in AppModel.shared.translated(key: key, english: english) }
                 send(["type": "translation", "id": id, "en": english, "ms": ms])
-            }
-            var shown = false
-            do {
-                // The quick translation first (often the partial's is the same text) ...
-                show(try await (lastTranslated?.ja == japanese ? lastTranslated!.en : toEnglish.translate(japanese)), "quick")
                 shown = true
-            } catch {
-                appLog("translation failed: \(error)")
             }
-            // ... then the chosen engine's, which can know the conversation, replaces it.
-            if let better = await refine(japanese, from: "Japanese", to: "English", context: context, previous: previous, tag: "EN #\(id)") {
-                show(better.text, better.how)
-                shown = true
-            } else if let quickText {
-                show(quickText, "quick, model not used") // the model didn't answer: now the quick one is shown
+            // Apple's quick translation and the chosen engine's run at the same time; Apple's is shown first unless a
+            // fast on-phone model is about to answer (then it is only logged, and shown if the model gives nothing).
+            let quick = Task { () -> (text: String, ms: Int) in
+                let quickStarted = Date()
+                let reused = self.lastTranslated
+                let text = try await (reused?.ja == japanese ? reused!.en : self.toEnglish.translate(japanese))
+                return (text, Int(Date().timeIntervalSince(quickStarted) * 1000))
             }
+            if !hold {
+                do { show(try await quick.value.text, "quick") } catch { appLog("translation failed: \(error)") }
+            }
+            let better = await refine(japanese, from: "Japanese", to: "English", context: context, previous: previous, tag: "EN #\(id)")
+            if hold {
+                switch await quick.result {
+                case .success(let result) where better == nil: show(result.text, "quick, model not used")
+                case .success(let result): appLog("EN #\(id) (quick, not shown): \(result.text) (\(result.ms) ms)")
+                case .failure(let error): appLog("translation failed: \(error)")
+                }
+            }
+            if let better { show(better.text, better.how) }
             if !shown {
                 Task { @MainActor in AppModel.shared.translated(key: key, english: "(translation failed)") }
                 send(["type": "translation", "id": id, "en": "", "error": "translation failed"])
@@ -306,29 +333,30 @@ private final class Session {
         Task {
             let started = Date()
             let hold = Self.holdsQuickResult
-            var quickText: String?
+            var shown = false
             func show(_ japanese: String, _ how: String) {
                 let ms = Int(Date().timeIntervalSince(started) * 1000)
                 appLog("JA (for them) #\(id) (\(how)): \(japanese) (\(ms) ms)")
-                if how == "quick", hold {
-                    quickText = japanese
-                    return
-                }
                 Task { @MainActor in AppModel.shared.translatedToJapanese(key: key, japanese: japanese) }
-            }
-            var shown = false
-            do {
-                show(try await toJapanese.translate(english), "quick")
                 shown = true
-            } catch {
-                appLog("translation to Japanese failed: \(error)")
             }
-            if let better = await refine(english, from: "English", to: "Japanese", context: context, previous: previous, tag: "JA (for them) #\(id)") {
-                show(better.text, better.how)
-                shown = true
-            } else if let quickText {
-                show(quickText, "quick, model not used")
+            let quick = Task { () -> (text: String, ms: Int) in
+                let quickStarted = Date()
+                let text = try await self.toJapanese.translate(english)
+                return (text, Int(Date().timeIntervalSince(quickStarted) * 1000))
             }
+            if !hold {
+                do { show(try await quick.value.text, "quick") } catch { appLog("translation to Japanese failed: \(error)") }
+            }
+            let better = await refine(english, from: "English", to: "Japanese", context: context, previous: previous, tag: "JA (for them) #\(id)")
+            if hold {
+                switch await quick.result {
+                case .success(let result) where better == nil: show(result.text, "quick, model not used")
+                case .success(let result): appLog("JA (for them) #\(id) (quick, not shown): \(result.text) (\(result.ms) ms)")
+                case .failure(let error): appLog("translation to Japanese failed: \(error)")
+                }
+            }
+            if let better { show(better.text, better.how) }
             if !shown {
                 Task { @MainActor in AppModel.shared.translatedToJapanese(key: key, japanese: "(translation failed)") }
             }
