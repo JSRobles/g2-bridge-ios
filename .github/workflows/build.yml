@@ -31,6 +31,16 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
+      - name: Get llama.cpp's iOS framework
+        env:
+          LLAMA_TAG: b11887
+        run: |
+          mkdir -p Frameworks
+          curl -fsSL -o llama.zip "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_TAG/llama-$LLAMA_TAG-xcframework.zip"
+          unzip -q llama.zip -d llama-unzipped
+          mv llama-unzipped/build-apple/llama.xcframework Frameworks/
+          ls Frameworks/llama.xcframework
+
       - name: Generate the Xcode project
         run: |
           brew install xcodegen

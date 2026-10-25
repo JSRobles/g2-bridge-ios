@@ -89,8 +89,19 @@ private final class Session {
         contextLock.unlock()
     }
 
-    private var languageModelWanted: Bool {
-        UserDefaults.standard.bool(forKey: ContextTranslator.defaultsKey) && ContextTranslator.isAvailable
+    // The line each speaker said just before, for the local models (older than this, it is another topic).
+    private var lastThem: (text: String, time: Date)?
+    private var lastMine: (text: String, time: Date)?
+    private static let previousLineMaxAge: TimeInterval = 30
+
+    /// The line this speaker said before `new`, if recent; `new` becomes the previous line.
+    private func swapPrevious(them: Bool, new: String) -> String? {
+        contextLock.lock()
+        defer { contextLock.unlock() }
+        let old = them ? lastThem : lastMine
+        if them { lastThem = (new, Date()) } else { lastMine = (new, Date()) }
+        guard let old, Date().timeIntervalSince(old.time) <= Self.previousLineMaxAge else { return nil }
+        return old.text
     }
 
     // The language model takes seconds per sentence. One at a time: a sentence that finishes while it
@@ -193,6 +204,38 @@ private final class Session {
         partialLock.unlock()
     }
 
+    /// The chosen engine's translation, to replace Apple Translation's quick one; nil keeps the quick one.
+    private func refine(_ text: String, from source: String, to target: String, context: [String], previous: String?, tag: String)
+        async -> (text: String, how: String)? {
+        switch TranslationEngine.current {
+        case .appleTranslation:
+            return nil
+        case .appleLanguageModel:
+            guard ContextTranslator.isAvailable else { return nil }
+            guard claimLanguageModel() else {
+                appLog("\(tag): language model busy, keeping the quick translation")
+                return nil
+            }
+            defer { releaseLanguageModel() }
+            do {
+                return (try await contextTranslator.translate(text, from: source, to: target, context: context), "language model")
+            } catch {
+                appLog("\(tag): language model failed: \(error)")
+                return nil
+            }
+        case .lfm2, .hymt2:
+            guard let model = TranslationEngine.current.localModel else { return nil }
+            do {
+                let output = try await LocalTranslator.shared.translate(text, from: source, to: target, previous: previous, using: model)
+                appLog("\(tag) \(model.name): \(output.ms) ms (\(output.details))")
+                return (output.text, model.name)
+            } catch {
+                appLog("\(tag): \(model.name) not used, keeping the quick translation: \(error.localizedDescription)")
+                return nil
+            }
+        }
+    }
+
     private func sentence(_ japanese: String) {
         endPartial()
         let id = nextId
@@ -202,6 +245,7 @@ private final class Session {
         Task { @MainActor in AppModel.shared.heard(key: key, japanese: japanese) }
         send(["type": "final", "id": id, "ja": japanese])
         let context = contextLines()
+        let previous = swapPrevious(them: true, new: japanese)
         remember("Them (Japanese): \(japanese)")
         Task {
             let started = Date()
@@ -219,19 +263,10 @@ private final class Session {
             } catch {
                 appLog("translation failed: \(error)")
             }
-            // ... then the language model's, which knows the conversation, replaces it.
-            if languageModelWanted {
-                if claimLanguageModel() {
-                    do {
-                        show(try await contextTranslator.translate(japanese, from: "Japanese", to: "English", context: context), "language model")
-                        shown = true
-                    } catch {
-                        appLog("language model translation failed: \(error)")
-                    }
-                    releaseLanguageModel()
-                } else {
-                    appLog("EN #\(id): language model busy, keeping the quick translation")
-                }
+            // ... then the chosen engine's, which can know the conversation, replaces it.
+            if let better = await refine(japanese, from: "Japanese", to: "English", context: context, previous: previous, tag: "EN #\(id)") {
+                show(better.text, better.how)
+                shown = true
             }
             if !shown {
                 Task { @MainActor in AppModel.shared.translated(key: key, english: "(translation failed)") }
@@ -249,6 +284,7 @@ private final class Session {
         appLog("EN (you) #\(id): \(english)")
         Task { @MainActor in AppModel.shared.said(key: key, english: english) }
         let context = contextLines()
+        let previous = swapPrevious(them: false, new: english)
         remember("You (English): \(english)")
         Task {
             let started = Date()
@@ -264,18 +300,9 @@ private final class Session {
             } catch {
                 appLog("translation to Japanese failed: \(error)")
             }
-            if languageModelWanted {
-                if claimLanguageModel() {
-                    do {
-                        show(try await contextTranslator.translate(english, from: "English", to: "Japanese", context: context), "language model")
-                        shown = true
-                    } catch {
-                        appLog("language model translation to Japanese failed: \(error)")
-                    }
-                    releaseLanguageModel()
-                } else {
-                    appLog("JA (for them) #\(id): language model busy, keeping the quick translation")
-                }
+            if let better = await refine(english, from: "English", to: "Japanese", context: context, previous: previous, tag: "JA (for them) #\(id)") {
+                show(better.text, better.how)
+                shown = true
             }
             if !shown {
                 Task { @MainActor in AppModel.shared.translatedToJapanese(key: key, japanese: "(translation failed)") }

@@ -4,12 +4,15 @@ import Translation
 @main
 struct G2BridgeApp: App {
     @StateObject private var model = AppModel.shared
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
                 .task { model.start() }
+                // llama.cpp's GPU work is aborted by iOS if the app is not in front: the local models wait for it.
+                .onChange(of: scenePhase) { _, phase in LocalTranslator.setActive(phase == .active) }
         }
     }
 }
@@ -145,6 +148,7 @@ struct SentenceView: View {
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var models = ModelStore.shared
     @Environment(\.dismiss) private var dismiss
     let downloadTranslation: () -> Void
 
@@ -165,10 +169,22 @@ struct SettingsView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+                Section("Translation") {
+                    Picker("Model", selection: $model.engine) {
+                        ForEach(TranslationEngine.allCases) { engine in Text(engine.title).tag(engine) }
+                    }
+                    .pickerStyle(.menu)
+                    ForEach(LocalModel.allCases) { local in
+                        ModelRow(model: local, chosen: model.engine.localModel == local)
+                    }
+                    Toggle("Run the on-phone models on the GPU", isOn: $model.localModelGPU)
+                    Text("Apple Translation always answers first. The other models then replace its result when theirs arrives; both are in the log with their times, memory and temperature. A model that isn't downloaded, is still busy with the last sentence, or fails just leaves Apple's result. Downloaded once (Wi-Fi), then used offline.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 Section("Apple on-device models") {
                     Button("Download Japanese and English translation", action: downloadTranslation)
-                    Toggle("Translate with Apple's language model (experimental)", isOn: $model.useLanguageModel)
-                    Text("Language model: \(ContextTranslator.statusText). It translates each sentence knowing the earlier lines (who is speaking about whom). It is slower than the plain translation, which shows first and is replaced when it arrives.")
+                    Text("Apple language model: \(ContextTranslator.statusText). It translates each sentence knowing the earlier lines (who is speaking about whom), but takes seconds per sentence.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -185,6 +201,40 @@ struct SettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+            }
+        }
+    }
+}
+
+/// One on-phone model: its download state and the buttons to get or remove the file.
+struct ModelRow: View {
+    @ObservedObject private var store = ModelStore.shared
+    let model: LocalModel
+    let chosen: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("\(model.name) (\(model.sizeText))").fontWeight(chosen ? .semibold : .regular)
+                Spacer()
+                switch store.state(model) {
+                case .missing, .failed:
+                    Button("Download") { store.download(model) }.buttonStyle(.bordered)
+                case .downloading:
+                    Button("Cancel") { store.cancel(model) }.buttonStyle(.bordered)
+                case .ready:
+                    Button("Delete", role: .destructive) { store.delete(model) }.buttonStyle(.bordered)
+                }
+            }
+            switch store.state(model) {
+            case .downloading(let fraction):
+                ProgressView(value: fraction)
+            case .failed(let message):
+                Text("Download failed: \(message)").font(.footnote).foregroundStyle(.red)
+            case .ready:
+                Text("On this phone").font(.footnote).foregroundStyle(.secondary)
+            case .missing:
+                EmptyView()
             }
         }
     }

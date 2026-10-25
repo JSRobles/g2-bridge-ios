@@ -4,3 +4,6 @@ Payload/
 *.ipa
 .DS_Store
 xcuserdata/
+Frameworks/
+llama.zip
+llama-unzipped/

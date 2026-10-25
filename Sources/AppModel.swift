@@ -27,7 +27,7 @@ final class AppModel: ObservableObject {
         static let audioKeepAlive = "audioKeepAlive"
         static let locationKeepAlive = "locationKeepAlive"
         static let keepScreenOn = "keepScreenOn"
-        static let useLanguageModel = ContextTranslator.defaultsKey
+        static let oldUseLanguageModel = ContextTranslator.defaultsKey // before the engine choice existed
     }
 
     @Published var lines: [String] = []
@@ -55,9 +55,20 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Translate with Apple's on-device language model, which sees the conversation so far.
-    @Published var useLanguageModel: Bool {
-        didSet { UserDefaults.standard.set(useLanguageModel, forKey: Keys.useLanguageModel) }
+    /// What improves on Apple Translation's quick result (see TranslationEngine).
+    @Published var engine: TranslationEngine {
+        didSet {
+            UserDefaults.standard.set(engine.rawValue, forKey: TranslationEngine.defaultsKey)
+            applyEngine()
+        }
+    }
+
+    /// Run the local models on the GPU (Metal) instead of the CPU.
+    @Published var localModelGPU: Bool {
+        didSet {
+            UserDefaults.standard.set(localModelGPU, forKey: LocalTranslator.gpuKey)
+            applyEngine()
+        }
     }
 
     private let server = BridgeServer()
@@ -66,11 +77,17 @@ final class AppModel: ObservableObject {
 
     private init() {
         let defaults = UserDefaults.standard
-        defaults.register(defaults: [Keys.audioKeepAlive: true, Keys.locationKeepAlive: false, Keys.keepScreenOn: true, Keys.useLanguageModel: false])
+        defaults.register(defaults: [Keys.audioKeepAlive: true, Keys.locationKeepAlive: false, Keys.keepScreenOn: true, LocalTranslator.gpuKey: true])
         audioKeepAlive = defaults.bool(forKey: Keys.audioKeepAlive)
         locationKeepAlive = defaults.bool(forKey: Keys.locationKeepAlive)
         keepScreenOn = defaults.bool(forKey: Keys.keepScreenOn)
-        useLanguageModel = defaults.bool(forKey: Keys.useLanguageModel)
+        localModelGPU = defaults.bool(forKey: LocalTranslator.gpuKey)
+        if let saved = defaults.string(forKey: TranslationEngine.defaultsKey), let known = TranslationEngine(rawValue: saved) {
+            engine = known
+        } else {
+            // Carry over the old "language model" switch.
+            engine = defaults.bool(forKey: Keys.oldUseLanguageModel) ? .appleLanguageModel : .appleTranslation
+        }
     }
 
     func log(_ message: String) {
@@ -118,7 +135,27 @@ final class AppModel: ObservableObject {
             log("server failed: \(error)")
         }
         applyKeepAlive()
+        applyEngine()
+        NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { _ in
+            appLog("memory warning: unloading the local model")
+            LocalTranslator.shared.unload()
+        }
         Task { await Recognizer.prepareAssets() }
+    }
+
+    /// A model file finished downloading: load it now if it is the chosen engine.
+    func modelDownloaded(_ model: LocalModel) {
+        if engine.localModel == model { applyEngine() }
+    }
+
+    /// Loads the chosen local model ahead of the first sentence, or frees the memory if none is chosen.
+    private func applyEngine() {
+        guard started else { return }
+        if let model = engine.localModel {
+            LocalTranslator.shared.preload(model)
+        } else {
+            LocalTranslator.shared.unload()
+        }
     }
 
     private func applyKeepAlive() {

@@ -11,6 +11,10 @@ targets:
     platform: iOS
     sources:
       - Sources
+    dependencies:
+      # llama.cpp's prebuilt iOS framework; the workflow downloads it into Frameworks/ (not committed, 68 MB)
+      - framework: Frameworks/llama.xcframework
+        embed: true
     info:
       path: Sources/Info.plist
       properties:
@@ -28,8 +32,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.jsrobles.g2bridge
         SWIFT_VERSION: "5.0"
         SWIFT_STRICT_CONCURRENCY: minimal
-        MARKETING_VERSION: "0.6.1"
-        CURRENT_PROJECT_VERSION: "18"
+        MARKETING_VERSION: "0.7.0"
+        CURRENT_PROJECT_VERSION: "19"
         CODE_SIGN_STYLE: Manual
         CODE_SIGNING_ALLOWED: "NO"
         CODE_SIGNING_REQUIRED: "NO"
